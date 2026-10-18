@@ -1,0 +1,24 @@
+# Credit Desk theme. These are Streamlit's own theme hooks; the full design system lives
+# in src/ui.py and docs/design_system.md.
+[theme]
+primaryColor = "#0B6B62"
+backgroundColor = "#F3F5F8"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1B2430"
+font = "sans serif"
+
+[server]
+headless = true
+# Bind to loopback only. In production this sits behind a reverse proxy (see
+# deploy/nginx.conf.example) that terminates TLS and is the only thing exposed to the
+# network — the app itself never speaks HTTPS or listens on a public interface directly.
+address = "127.0.0.1"
+enableXsrfProtection = true
+enableCORS = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = false
