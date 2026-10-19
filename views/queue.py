@@ -155,7 +155,33 @@ def _review_panel(df: pd.DataFrame, user) -> None:
             if st.button(label, key=f"q_{verdict}_{pick}", type="primary" if verdict == "approved" else "secondary"):
                 try:
                     workflow.review(pick, username=user.username, role=user.role, verdict=verdict, comment=comment)
+                    _push_review_result(row, verdict, comment, user)
                     st.success(f"{pick}: {verdict}.")
                     st.rerun()
                 except (ValueError, PermissionError, audit.AuditError) as exc:
                     st.error(str(exc))
+
+
+def _push_review_result(row, verdict: str, comment: str, user) -> None:
+    """The result window after Approve / Reject / Return to officer."""
+    from views import _result
+    officer = row["username"]
+    tone, status, steps = {
+        "approved": ("good", "Approved by the second approver - the decision is now final",
+                     [f"The officer ({officer}) creates the loan in Loan book > Add a loan.",
+                      "The customer letter can be printed from Score an application or the case record."]),
+        "rejected": ("stop", "Rejected by the second approver - the application is declined",
+                     [f"The officer ({officer}) informs the customer; the decline letter lists the reasons."]),
+        "returned": ("warn", "Returned to the officer for changes",
+                     [f"The officer ({officer}) sees the case as 'Returned to officer' with your comment.",
+                      "They correct it in Score an application and save it again; it comes back to this queue."]),
+    }[verdict]
+    rows = [("Application", row["application_id"]), ("Customer / case", row["customer_ref"]),
+            ("Loan amount", f"{float(row['loan_amount']):,.2f}"), ("Officer decision", f"{row['outcome']} by {officer}"),
+            ("Model score", f"{float(row['probability']) * 100:.1f}% (routing {row['routing']})"),
+            ("Why it needed review", row["review_reasons"] or "-"),
+            ("Your verdict", {"approved": "Approve", "rejected": "Reject", "returned": "Return to officer"}[verdict]),
+            ("Your comment", comment.strip()), ("Reviewed by", f"{user.display_name} ({user.username})")]
+    _result.push(title="Review recorded", pdf_title="Second approval result", number=str(row["application_id"]),
+                 status=status, tone=tone, rows=rows, next_steps=steps,
+                 file_stem=f"{row['application_id']}_review", signatures=("Credit officer", "Second approver"))

@@ -428,6 +428,15 @@ def _change_control(act) -> None:
     if st.button("Submit proposal", type="primary", disabled=not diff):
         try:
             pid = policy_store.propose(draft, user.username, user.role, reason)
+            from views import _result
+            _result.push(title="Policy change submitted", pdf_title="Policy change proposal", number=f"POL-{pid}",
+                         status="Submitted - waiting for a second person to approve", tone="warn",
+                         rows=[("Proposal", f"#{pid}"), ("Proposed by", f"{user.display_name} ({user.username})"),
+                               ("Reason", reason.strip())] + [(lbl, f"{a_} -> {b_}") for lbl, a_, b_ in diff],
+                         next_steps=["Another Risk Manager or Administrator approves or rejects it under "
+                                     "Change control > Waiting for approval.",
+                                     "The new rules apply to every officer the moment it is approved."],
+                         file_stem=f"policy_proposal_{pid}", signatures=("Proposed by", "Approved by"))
             st.success(f"Proposal #{pid} submitted. It applies once a second person approves it.")
             st.rerun()
         except (ValueError, audit.AuditError) as exc:
@@ -451,6 +460,24 @@ def _change_control(act) -> None:
                     if st.button(label, key=f"pol_{label}_{p['id']}"):
                         try:
                             policy_store.decide(p["id"], ok, user.username, user.role, note)
+                            from views import _result
+                            _result.push(
+                                title="Policy change " + ("approved" if ok else "rejected"),
+                                pdf_title="Policy change decision", number=f"POL-{p['id']}",
+                                status=("Approved - the new rules are now in force" if ok else
+                                        "Rejected - the current rules stay in force"),
+                                tone="good" if ok else "stop",
+                                rows=[("Proposal", f"#{p['id']}"), ("Proposed by", p["username"]),
+                                      ("Reason given", p["reason"]),
+                                      ("Decided by", f"{user.display_name} ({user.username})"),
+                                      ("Comment", note or "-"),
+                                      ("Max DTI / LTI", f"{s.max_dti:.0%} / {s.max_lti:.2f}x"),
+                                      ("Min credit score / max late", f"{s.min_credit_score} / {s.max_late_payments}"),
+                                      ("Cut-off / officer authority", f"{s.cutoff:.0%} / ${s.officer_authority_limit:,.0f}")],
+                                next_steps=(["Every new score uses these rules from now on.",
+                                             "The Version timeline below shows when each version was in force."]
+                                            if ok else []),
+                                file_stem=f"policy_decision_{p['id']}", signatures=("Proposed by", "Decided by"))
                             st.rerun()
                         except (ValueError, PermissionError, audit.AuditError) as exc:
                             st.error(str(exc))

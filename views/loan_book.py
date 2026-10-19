@@ -9,8 +9,9 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from src import audit, auth, loanbook, policy_store, reports, risk_economics as econ, ui, workflow
+from src import audit, auth, loanbook, notifications, policy_store, reports, risk_economics as econ, ui, workflow
 from src.data_pipeline import today_local
+from views import _result
 from src.deps import MissingLibrary
 from src.security import to_safe_csv
 from views._docs import render_documents
@@ -33,16 +34,20 @@ def render() -> None:
     asof = st.date_input("Report as of", value=today, max_value=today, key="lb_asof", format="DD/MM/YYYY")
     book = _book(asof)
 
-    tabs = st.tabs(["Overview", "Loans", "Add a loan", "Stress and limits", "Reports"])
+    late = notifications.overdue(book, asof)
+    late_label = f"🔔 Late payments ({len(late)})" if len(late) else "Late payments"
+    tabs = st.tabs([late_label, "Overview", "Loans", "Add a loan", "Stress and limits", "Reports"])
     with tabs[0]:
-        _overview(book, settings, asof)
+        _late(book, late, user, asof)
     with tabs[1]:
-        _loans(book, user, asof)
+        _overview(book, settings, asof)
     with tabs[2]:
-        _add(user, settings)
+        _loans(book, user, asof)
     with tabs[3]:
-        _stress(book, settings)
+        _add(user, settings)
     with tabs[4]:
+        _stress(book, settings)
+    with tabs[5]:
         _reports(book, settings, asof)
 
 
@@ -126,6 +131,79 @@ def _upcoming(book: pd.DataFrame, asof: date) -> None:
                                   na_rep="-"), hide_index=True)
 
 
+# ----------------------------------------------------------------------------- late payments
+def _late(book: pd.DataFrame, late: pd.DataFrame, user, asof: date) -> None:
+    ui.section("Late payment notifications",
+               "Every active loan with an unpaid instalment, most urgent first. Open a customer to download "
+               "the overdue notice or record a payment or a promise to pay.")
+    s = notifications.summary(late)
+    c = st.columns(4, gap="small")
+    with c[0]:
+        ui.kpi("Customers late", f"{s['customers']:,}", foot=f"{s['loans']} loan(s)")
+    with c[1]:
+        ui.kpi("Amount overdue", ui.money(s["arrears"]))
+    with c[2]:
+        ui.kpi("30+ days late", f"{s['over_30']:,}", foot="formal notice")
+    with c[3]:
+        ui.kpi("90+ days late", f"{s['over_90']:,}", foot="non-performing")
+    if late.empty:
+        ui.note("No customer is late on payment" + (f" as of {asof:%d/%m/%Y}." if asof else "."),
+                title="All clear", tone="good")
+        soon = notifications.due_soon(book, asof, 7)
+        if len(soon):
+            st.caption(f"{len(soon)} instalment(s) fall due in the next 7 days - see Overview > Payments due soon.")
+        return
+
+    sev = ui.choice("Show", ["All"] + [k for k in notifications.ORDER if s["by_severity"][k]], default="All",
+                    key="lb_late_sev")
+    view = late if sev == "All" else late[late["severity"] == sev]
+    tags = "".join(ui.tag(f"{k}: {n}", notifications.severity(
+        {"Default": 90, "Serious": 60, "Warning": 30, "Reminder": 1, "Overdue today": 0}[k])[1])
+        for k, n in s["by_severity"].items() if n)
+    st.markdown(tags, unsafe_allow_html=True)
+    shown = view.drop(columns=["action", "bucket"]).rename(columns={
+        "loan_id": "Loan", "customer_ref": "Customer", "product": "Product", "severity": "Level",
+        "dpd": "Days late", "arrears": "Overdue amount", "outstanding": "Remaining balance",
+        "instalments_missed": "Unpaid instalments", "oldest_unpaid_due": "Oldest unpaid due",
+        "last_payment": "Last payment", "last_promise": "Last promise to pay"})
+    ui.table(shown.style.format({"Overdue amount": "{:,.2f}", "Remaining balance": "{:,.2f}"}, na_rep="-"),
+             hide_index=True)
+
+    ui.section("Customer")
+    labels = [f"{r.customer_ref} - {r.loan_id} - {r.dpd} days late - {r.arrears:,.2f} overdue"
+              for r in view.itertuples()]
+    if not labels:
+        return
+    pick = st.selectbox("Open a late customer", labels, key="lb_late_pick")
+    row = view.iloc[labels.index(pick)]
+    label, colour, action = notifications.severity(int(row["dpd"]))
+    st.markdown(
+        f'<div style="border:1px solid #D5DCE3;border-left:6px solid {colour};border-radius:8px;padding:12px 14px;'
+        f'background:#FFFFFF;margin-bottom:8px"><div style="font-weight:700;color:{colour}">{label} - '
+        f'{int(row["dpd"])} day(s) late</div><div style="color:#1B2430;margin-top:4px">'
+        f'<b>{ui.money(float(row["arrears"]))}</b> overdue on {int(row["instalments_missed"])} instalment(s) '
+        f'(oldest due {row["oldest_unpaid_due"]}). Remaining balance {ui.money(float(row["outstanding"]))}.</div>'
+        f'<div style="color:#5B6879;margin-top:4px">Last payment: {row["last_payment"] or "none"} &middot; '
+        f'Last promise: {row["last_promise"] or "none"}</div>'
+        f'<div style="color:#1B2430;margin-top:6px"><b>What to do:</b> {action}</div></div>',
+        unsafe_allow_html=True)
+    if reports.HAVE_PDF:
+        pay_by = (today_local().date() + timedelta(days=7)).strftime("%d/%m/%Y")
+        st.download_button(
+            "Download overdue notice for the customer (PDF)",
+            reports.overdue_notice_pdf(customer_ref=row["customer_ref"], loan_id=row["loan_id"],
+                                       product=row["product"], dpd=int(row["dpd"]), arrears=float(row["arrears"]),
+                                       missed=int(row["instalments_missed"]), oldest_due=str(row["oldest_unpaid_due"]),
+                                       outstanding=float(row["outstanding"]), pay_by=pay_by, severity=label,
+                                       issued=today_local().strftime("%d %B %Y")),
+            file_name=f"overdue_notice_{row['loan_id']}.pdf", mime="application/pdf", key="lb_late_notice")
+    else:
+        ui.note(str(MissingLibrary("reportlab")), title="PDF notice unavailable", tone="warn")
+    loan = loanbook.get_loan(row["loan_id"])
+    st.markdown("**Record a payment, a promise to pay or a call note for this customer**")
+    _event_forms(loan, user, key_prefix="late")
+
+
 def _loans(book: pd.DataFrame, user, asof: date) -> None:
     if book.empty:
         st.caption("No loans yet.")
@@ -161,10 +239,10 @@ def _loans(book: pd.DataFrame, user, asof: date) -> None:
     render_documents(lid, key=f"lb_docs_{lid}")
 
 
-def _event_forms(loan: dict, user) -> None:
+def _event_forms(loan: dict, user, key_prefix: str = "lb") -> None:
     lid = loan["loan_id"]
     kinds = ["payment", "note", "promise", "settle"] + (["restructure", "writeoff"] if user.role in loanbook.RISK_ROLES else [])
-    with st.form(f"lb_ev_{lid}", clear_on_submit=True, border=True):
+    with st.form(f"{key_prefix}_ev_{lid}", clear_on_submit=True, border=True):
         kind = st.selectbox("Record", kinds)
         when = st.date_input("Date", value=date.today(), max_value=date.today() + timedelta(days=365))
         amount = st.number_input("Amount (payments)", 0.0, 1e12, 0.0, step=100.0)
@@ -178,12 +256,86 @@ def _event_forms(loan: dict, user) -> None:
     if go:
         payload = {"new_term_months": int(nt), "new_annual_rate": nr / 100, "first_due_on": fd} if kind == "restructure" else None
         try:
-            loanbook.add_event(lid, username=user.username, role=user.role, kind=kind, event_date=when,
-                               amount=amount, detail=note, payload=payload)
+            before = loanbook.snapshot(loan, loanbook.events_for(lid), max(when, date.today()))
+            eid = loanbook.add_event(lid, username=user.username, role=user.role, kind=kind, event_date=when,
+                                     amount=amount, detail=note, payload=payload)
+            _push_event_result(loan, kind, eid, before, when, amount, note, user)
             st.success("Saved.")
             st.rerun()
         except (ValueError, PermissionError, audit.AuditError) as exc:
             st.error(str(exc))
+
+
+EVENT_SLIP = {  # kind -> (number prefix, window title, PDF title)
+    "payment": ("PAY", "Payment receipt", "Payment receipt"),
+    "settle": ("STL", "Settlement receipt", "Settlement receipt"),
+    "promise": ("PRM", "Promise to pay recorded", "Promise to pay"),
+    "note": ("NOTE", "Collection note saved", "Collection note"),
+    "restructure": ("RST", "Loan restructured", "Restructure confirmation"),
+    "writeoff": ("WO", "Loan written off", "Write-off record"),
+}
+
+
+def _fmt_sched(sched: pd.DataFrame) -> pd.DataFrame:
+    t = sched.copy()
+    for col in ("installment", "interest", "principal", "balance"):
+        t[col] = t[col].map("{:,.2f}".format)
+    return t.rename(columns={"no": "No.", "due_date": "Due date", "installment": "Instalment",
+                             "interest": "Interest", "principal": "Principal", "balance": "Balance after"})
+
+
+def _push_event_result(loan: dict, kind: str, eid: int, before: dict, when: date, amount: float, note: str,
+                       user) -> None:
+    """The receipt / result window after Save record."""
+    lid = loan["loan_id"]
+    ev = loanbook.events_for(lid)
+    after = loanbook.snapshot(loan, ev, max(when, date.today()))
+    prefix, title, pdf_title = EVENT_SLIP[kind]
+    money = "{:,.2f}".format
+    rows = [("Loan", lid), ("Customer", loan["customer_ref"]), ("Product", loan["product"]),
+            ("Date", when.strftime("%d/%m/%Y")), ("Recorded by", f"{user.display_name} ({user.username})")]
+    table, table_title, steps, tone = None, "", [], "good"
+    if kind in ("payment", "settle"):
+        rows[3:3] = [("Amount received", money(amount))]
+        rows += [("Overdue before -> after", f"{money(before['arrears'])} -> {money(after['arrears'])}"),
+                 ("Days late before -> after", f"{before['dpd']} -> {after['dpd']}"),
+                 ("Total paid to date", money(after["paid"])),
+                 ("Remaining balance", money(after["outstanding"])),
+                 ("Loan status", after["status"])]
+        if after["status"] == "Active" and after["next_due"] is not None:
+            rows.append(("Next instalment", f"{money(after['next_amount'])} due {after['next_due']:%d/%m/%Y}"))
+        if after["arrears"] > loanbook.TOL:
+            tone, status = "warn", f"Payment received - {money(after['arrears'])} is still overdue"
+            steps = ["Give the customer this receipt.",
+                     "The loan is still late: agree when the rest will be paid and record it as a promise."]
+        else:
+            status = "Payment received - loan fully settled" if after["status"] == "Closed" else \
+                "Payment received - the loan is up to date"
+            steps = ["Give the customer this receipt."]
+    elif kind == "promise":
+        status = "Promise to pay recorded"
+        rows += [("Promise", note), ("Currently overdue", money(after["arrears"])), ("Days late", str(after["dpd"]))]
+        steps = ["Check on the promised date that the payment arrived.",
+                 "If it did not, call again and escalate at 30, 60 and 90 days late."]
+    elif kind == "note":
+        status = "Collection note saved"
+        rows += [("Note", note), ("Currently overdue", money(after["arrears"]))]
+    elif kind == "restructure":
+        tone, status = "info", "Loan restructured - new repayment schedule in force"
+        rows += [("Reason", note), ("Outstanding", money(after["outstanding"])),
+                 ("Next instalment", f"{money(after['next_amount'])} due {after['next_due']:%d/%m/%Y}"
+                  if after["next_due"] is not None else "-")]
+        sched = loanbook.schedule(loan, ev)
+        table, table_title = _fmt_sched(sched[sched["due_date"] >= when]), "New repayment schedule"
+        steps = ["Give the customer the new schedule and have the restructure agreement signed."]
+    else:  # writeoff
+        tone, status = "stop", "Loan written off"
+        rows += [("Reason", note), ("Balance written off", money(before["outstanding"])),
+                 ("Days late at write-off", str(before["dpd"]))]
+        steps = ["The loan leaves the active book. Any later recovery is recorded outside this loan."]
+    _result.push(title=title, pdf_title=pdf_title, number=f"{prefix}-{eid:06d}", status=status, tone=tone,
+                 rows=rows, table=table, table_title=table_title, next_steps=steps,
+                 file_stem=f"{prefix}-{eid:06d}_{lid}")
 
 
 def _add(user, settings) -> None:
@@ -218,10 +370,38 @@ def _add(user, settings) -> None:
                                        disbursed_on=disb, first_due_on=first, collateral_value=coll, band=band,
                                        application_id=None if src is None else str(src["application_id"]),
                                        area=area.strip().lower(), employment=emp.strip())
+            _push_loan_result(lid, user)
             st.success(f"Created {lid}.")
             st.rerun()
         except (ValueError, audit.AuditError) as exc:
             st.error(str(exc))
+
+
+def _push_loan_result(lid: str, user) -> None:
+    """The loan statement window after Create loan: terms, totals and the full schedule."""
+    loan = loanbook.get_loan(lid)
+    sched = loanbook.schedule(loan)
+    money = "{:,.2f}".format
+    total = float(sched["installment"].sum())
+    rows = [("Customer", loan["customer_ref"]), ("Product", loan["product"]),
+            ("Amount disbursed", money(loan["principal"])),
+            ("Interest rate", f"{loan['annual_rate']:.2%} per year"), ("Term", f"{loan['term_months']} months"),
+            ("Monthly instalment", money(float(sched["installment"].iloc[0]))),
+            ("Total interest", money(total - float(loan["principal"]))), ("Total to repay", money(total)),
+            ("Disbursed on", loanbook._d(loan["disbursed_on"]).strftime("%d/%m/%Y")),
+            ("First instalment due", loanbook._d(loan["first_due_on"]).strftime("%d/%m/%Y")),
+            ("Last instalment due", sched["due_date"].iloc[-1].strftime("%d/%m/%Y")),
+            ("Collateral value", money(loan["collateral_value"])), ("Routing band", loan["band"]),
+            ("From application", loan["application_id"] or "(none)"),
+            ("Created by", f"{user.display_name} ({user.username})")]
+    _result.push(title="Loan created", pdf_title="Loan disbursement statement", number=lid,
+                 status=f"Loan {lid} created - {money(loan['principal'])} disbursed", rows=rows,
+                 table=_fmt_sched(sched), table_title="Repayment schedule",
+                 next_steps=["Give the customer this statement and the repayment schedule.",
+                             "Record each payment in Loan book > Loans > Record > payment - a receipt opens "
+                             "after every payment.",
+                             "Late payments appear automatically in the sidebar alert and the Late payments tab."],
+                 file_stem=f"{lid}_statement", signatures=("Loan officer", "Customer"))
 
 
 def _stress(book: pd.DataFrame, settings) -> None:

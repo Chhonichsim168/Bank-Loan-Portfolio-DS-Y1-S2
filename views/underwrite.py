@@ -480,6 +480,8 @@ def _record(c, app: dict, extras: dict, e: dict, result: dict, interval, explana
                 out_of_range=bool(result["out_of_range"]))
             st.session_state["uw_saved"] = {"fingerprint": fp, "app_id": res.application_id,
                                             "pending": res.needs_review, "why": res.review_reasons}
+            _push_decision_result(res, user, ref.strip(), outcome, app, extras, result, interval,
+                                  explanation, rationale, c)
             st.rerun()
         except (ValueError, audit.AuditError) as exc:
             st.error(str(exc))
@@ -516,6 +518,62 @@ def _record(c, app: dict, extras: dict, e: dict, result: dict, interval, explana
             human_reviewed=True),   # only offered after a signed-in officer saved the decision
             file_name=f"{saved['app_id']}_letter.pdf", mime="application/pdf")
         render_documents(saved["app_id"], key="uw_docs")
+
+
+def _push_decision_result(res, user, ref, outcome, app, extras, result, interval, explanation, rationale, c) -> None:
+    """The result window after Save decision: a decision slip plus the full record and the customer letter."""
+    from views import _result
+    pv = st.session_state.get("_uw_pricing")
+    pending = bool(res.needs_review)
+    if pending:
+        tone, status = "warn", "Saved - waiting for a second approver"
+        steps = ["A Risk Manager or Administrator (not you) reviews it in Decision queue.",
+                 "They approve, reject or return it to you with a comment.",
+                 "Once approved, create the loan in Loan book > Add a loan."]
+    elif outcome in workflow.APPROVING:
+        tone, status = "good", f"Saved - {outcome} (final)"
+        steps = ["Give the customer the approval letter.", "Create the loan in Loan book > Add a loan."]
+    elif outcome == "Decline":
+        tone, status = "stop", "Saved - Decline (final)"
+        steps = ["Give the customer the decline letter: it lists the main reasons and how to ask for a review."]
+    else:
+        tone, status = "info", f"Saved - {outcome}"
+        steps = []
+    rows = [("Customer / case", ref), ("Decision", outcome), ("Loan amount", f"{app['loan_amount']:,.2f}"),
+            ("Term", f"{app['loan_term_months']} months"),
+            ("Model score", f"{result['probability'] * 100:.1f}% (range {interval[0] * 100:.0f}-{interval[1] * 100:.0f}%)"),
+            ("Routing", result["routing"]),
+            ("Hard policy", "pass" if result["policy_pass"] else "BREACH: " + "; ".join(result["breaches"])),
+            ("Status", "Pending second approval" if pending else "Final")]
+    if pending:
+        rows.append(("Second approval needed because", "; ".join(res.review_reasons)))
+    if pv:
+        rows += [("Indicative rate", f"{pv['rate']:.2%}"), ("Monthly instalment", f"{pv['emi']:,.2f}")]
+    rows += [("Officer", f"{user.display_name} ({user.username})"),
+             ("Policy / model", f"v{c.policy_version} / {c.model_version}")]
+    extra = []
+    if reports.HAVE_PDF:
+        try:
+            reasons_json = [{"label": r.label, "contribution": r.contribution, "detail": r.detail}
+                            for r in explanation["reasons"]]
+            extra.append(("Full decision record (PDF)", reports.decision_pdf(
+                app_id=res.application_id, customer_ref=ref, officer=f"{user.display_name} ({user.username})",
+                outcome=outcome, probability=result["probability"], interval=interval, routing=result["routing"],
+                policy_version=c.policy_version, model_version=c.model_version, policy_pass=result["policy_pass"],
+                breaches=result["breaches"], inputs={**app, **extras}, reasons=reasons_json, rationale=rationale,
+                loan_econ=pv), f"{res.application_id}.pdf", "application/pdf"))
+            if not pending:
+                adverse = [f"{r.label}: {r.detail}" for r in dec.adverse_reasons(explanation["reasons"])]
+                terms = (f"Amount {app['loan_amount']:,.0f}, term {app['loan_term_months']} months"
+                         + (f", indicative rate {pv['rate']:.2%}" if pv else "")) if outcome != "Decline" else ""
+                extra.append(("Customer letter (PDF)", reports.customer_letter_pdf(
+                    outcome=outcome, customer_ref=ref, reasons=adverse, terms=terms, human_reviewed=True),
+                    f"{res.application_id}_letter.pdf", "application/pdf"))
+        except Exception:
+            pass
+    _result.push(title="Decision saved", pdf_title="Credit decision slip", number=res.application_id,
+                 status=status, tone=tone, rows=rows, next_steps=steps, extra_files=extra,
+                 file_stem=f"{res.application_id}_slip", signatures=("Credit officer", "Checked by"))
 
 
 def _render_record(app_id, c, app, e, result, interval, explanation, user, outcome, rationale, ref) -> str:

@@ -174,7 +174,7 @@ def create_loan(*, username: str, role: str, customer_ref: str, product: str, pr
 
 
 def add_event(loan_id: str, *, username: str, role: str, kind: str, event_date, amount: float = 0.0,
-              detail: str = "", payload: dict | None = None) -> None:
+              detail: str = "", payload: dict | None = None) -> int:
     if kind not in KINDS:
         raise ValueError("Unknown event type.")
     if kind in RISK_ONLY and role not in RISK_ROLES:
@@ -201,11 +201,12 @@ def add_event(loan_id: str, *, username: str, role: str, kind: str, event_date, 
     conn = _conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO loan_events (loan_id, ts, username, role, kind, event_date, amount, detail, payload) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
             (loan_id, _now(), username, role, kind, _iso(event_date), float(amount), detail.strip(),
              json.dumps(payload, default=str)))
+        event_id = int(cur.lastrowid)
         audit.append(conn, username, role, f"loan_{kind}",
                      f"{loan_id} - {amount:,.2f} - {detail.strip()[:120]}".strip(" -"))
         conn.execute("COMMIT")
@@ -219,6 +220,7 @@ def add_event(loan_id: str, *, username: str, role: str, kind: str, event_date, 
         raise audit.AuditError(f"Event was NOT recorded: {exc}") from exc
     finally:
         conn.close()
+    return event_id                     # the record number, printed on receipts
 
 
 # =========================================================================================

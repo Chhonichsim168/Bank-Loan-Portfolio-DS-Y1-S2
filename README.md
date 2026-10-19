@@ -8,7 +8,7 @@ Built with Python, pandas, scikit-learn and Streamlit.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-1B2430)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.40%2B-0B6B62)
-![Tests](https://img.shields.io/badge/tests-184%20passing-1F7A5C)
+![Tests](https://img.shields.io/badge/tests-195%20passing-1F7A5C)
 ![License](https://img.shields.io/badge/License-MIT-5B6879)
 
 ---
@@ -51,6 +51,14 @@ Manual start for developers: `python launch.py`, or
 `pip install -r requirements.txt` then `streamlit run app.py`.
 </details>
 
+### New in v18
+
+- **Late-payment alert** in the sidebar on every page, a reminder after sign-in, and a
+  **Loan book > Late payments** tab with an overdue notice letter (PDF) for each late customer.
+- **Result window with a PDF slip** after every important button: Save decision, Create loan,
+  Save record (payment receipt), Approve / Reject / Return, and policy changes.
+  Details: `docs/history/CHANGES_v18.md`.
+
 ### Accounts
 
 No API key needed. Three simple accounts are created on first start:
@@ -80,7 +88,7 @@ Optional:
 ```bash
 python src/data_pipeline.py    # data-quality audit, writes data/loan_data_clean.csv
 python generate_report.py      # standalone HTML report with every chart embedded
-pytest -v                      # 184 tests (about 3 minutes; trains the model several times)
+pytest -v                      # 195 tests (about 3 minutes; trains the model several times)
 ```
 
 ---

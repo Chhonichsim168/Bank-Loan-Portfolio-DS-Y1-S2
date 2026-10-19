@@ -29,6 +29,7 @@ from src.mode import login_required  # noqa: E402
 from src.security import esc  # noqa: E402
 from views import (account, batch, drivers, governance, loan_book, model,  # noqa: E402
                    overview, policy, queue, segments, underwrite, users)
+from views import _result  # noqa: E402
 
 st.set_page_config(
     page_title="Credit Desk — Loan Portfolio Analytics",
@@ -306,6 +307,53 @@ def _load_sample_data() -> None:
             st.warning(f"Sample data could not be loaded ({exc}). The app works normally without it.")
 
 
+# =========================================================================================
+# LATE-PAYMENT NOTIFICATION (sidebar card on every page + one pop-up reminder per sign-in)
+# =========================================================================================
+@st.cache_data(ttl=300, show_spinner=False)
+def _late_counts(signature: tuple, day: str) -> tuple[dict, int]:
+    """Recomputed only when a loan or loan event is added (signature) or the day changes."""
+    from src import loanbook, notifications
+    book = loanbook.portfolio(day)
+    return notifications.summary(notifications.overdue(book, day)), len(notifications.due_soon(book, day, 3))
+
+
+def _late_payment_alert(loan_page=None) -> None:
+    from src import notifications
+    from src.data_pipeline import today_local
+    try:
+        s, soon = _late_counts(notifications.signature(), today_local().date().isoformat())
+    except Exception:                       # a notification must never break a page
+        return
+    if not s["loans"] and not soon:
+        return
+    if s["loans"]:
+        sev = s["by_severity"]
+        parts = [f"{sev[k]} {k.lower()}" for k in ("Default", "Serious", "Warning", "Reminder") if sev[k]]
+        red, dark, grey = "color:#B42318", "color:#7A271A", "color:#5B6879"
+        st.sidebar.markdown(
+            '<div class="cd-late" style="background:#FDECEA;border:1px solid #F4B4AE;border-left:5px solid #B42318;'
+            'border-radius:8px;padding:9px 11px;margin:6px 0 4px 0;font-size:0.82rem;line-height:1.35">'
+            f'<div style="font-weight:700;font-size:0.9rem;{red}">&#128276; {s["customers"]} customer(s) '
+            f'late on payment</div>'
+            f'<div style="{dark}"><b style="{dark}">{ui.money(s["arrears"])}</b> overdue on {s["loans"]} loan(s)</div>'
+            f'<div style="{dark}">{esc(", ".join(parts))}</div>'
+            + (f'<div style="{grey};margin-top:3px">{soon} more due in the next 3 days</div>' if soon else "")
+            + '</div>', unsafe_allow_html=True)
+        if loan_page is not None:
+            st.sidebar.page_link(loan_page, label="Open late payments")
+        if not st.session_state.get("_late_toast_shown"):
+            st.session_state["_late_toast_shown"] = True
+            if hasattr(st, "toast"):
+                st.toast(f"{s['customers']} customer(s) are late on payment - {ui.money(s['arrears'])} overdue. "
+                         "See Loan book -> Late payments.", icon="🔔")
+    elif soon:
+        st.sidebar.markdown(
+            '<div style="background:#FEF4E6;border-left:5px solid #B54708;border-radius:8px;padding:8px 11px;'
+            f'margin:6px 0 4px 0;font-size:0.82rem"><span style="color:#7A2E0E">&#128276; {soon} payment(s) due in '
+            'the next 3 days. No customer is late.</span></div>', unsafe_allow_html=True)
+
+
 def run() -> None:
     _missing_libraries_banner()
     _load_sample_data()
@@ -328,7 +376,9 @@ def run() -> None:
         flat_pages = [p for group_pages in page_objs.values() for p in group_pages.values()]
         page = st.navigation(flat_pages, position="hidden")
         render_nav(visible, page_objs)
+        _late_payment_alert(page_objs.get("Portfolio", {}).get("loanbook"))
         filters()
+        _result.render_pending()
         page.run()
     elif hasattr(st, "navigation"):
         # Older Streamlit without position="hidden": use its own always-expanded menu.
@@ -341,13 +391,17 @@ def run() -> None:
             for group, items in visible.items()
         }
         page = st.navigation(nav)
+        _late_payment_alert()
         filters()
+        _result.render_pending()
         page.run()
     else:
         # Older Streamlit still: fall back to a flat radio rail so the app still runs.
         flat = {title: fn for items in visible.values() for title, _, fn in items}
         choice = st.sidebar.radio("Navigate", list(flat.keys()), label_visibility="collapsed")
+        _late_payment_alert()
         filters()
+        _result.render_pending()
         flat[choice]()
 
 
