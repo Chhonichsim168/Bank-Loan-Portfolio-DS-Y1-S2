@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src import decisioning as dec
+from views._filters import filter_bar
 from src import ui
 from src.data_pipeline import MAX_CREDIT_SCORE, MAX_LATE_PAYMENTS_12M, MIN_CREDIT_SCORE, days_since, to_local
 from src import policy_store
@@ -25,7 +26,7 @@ def render() -> None:
         "good business caught with it, and which rule is doing the work.",
         eyebrow="Decisioning",
     )
-    ui.context_bar(f"{len(c.view):,} of {len(c.book):,} applications", c.chips)
+    filter_bar(c)
 
     act = policy_store.active()
     _banner(act)

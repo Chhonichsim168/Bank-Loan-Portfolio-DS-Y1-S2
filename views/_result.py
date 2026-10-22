@@ -15,6 +15,7 @@ On a Streamlit without pop-up windows the same content is shown at the top of th
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from html import escape as esc
 
@@ -55,6 +56,7 @@ def push(*, title: str, number: str, status: str, rows: list[tuple[str, str]], t
         "next_steps": next_steps or [], "note": note, "pdf": pdf,
         "file_stem": file_stem or number, "extra_files": extra_files or [],
     }
+    _loading_screen(title)
 
 
 def has_pending() -> bool:
@@ -100,6 +102,39 @@ def _buttons(r: dict) -> None:
         st.rerun()
     if not files and not reports.HAVE_PDF:
         st.caption("PDF slips need the 'reportlab' library (the START file installs it).")
+
+
+LOADING_HTML = """
+<style>
+@keyframes cdspin {{ to {{ transform: rotate(360deg); }} }}
+@keyframes cdbar {{ from {{ width: 8%; }} to {{ width: 100%; }} }}
+@keyframes cdfade {{ from {{ opacity: 0; }} to {{ opacity: 1; }} }}
+</style>
+<div style="position:fixed;inset:0;z-index:999990;background:rgba(15,46,42,0.45);display:flex;
+            align-items:center;justify-content:center;animation:cdfade .15s ease-out">
+  <div style="background:#FFFFFF;border-radius:14px;padding:26px 32px;width:360px;max-width:88vw;
+              box-shadow:0 18px 50px rgba(0,0,0,0.25);text-align:center;font-family:inherit">
+    <div style="width:42px;height:42px;margin:0 auto 14px auto;border-radius:50%;border:4px solid #D7E6E3;
+                border-top-color:#0B6B62;animation:cdspin .8s linear infinite"></div>
+    <div style="font-weight:700;font-size:1.05rem;color:#14302C">{title}</div>
+    <div style="color:#5B6879;font-size:0.9rem;margin-top:4px">Saved. Preparing your receipt...</div>
+    <div style="height:6px;background:#E4EFEC;border-radius:99px;margin-top:16px;overflow:hidden">
+      <div style="height:6px;background:#0B6B62;border-radius:99px;animation:cdbar {secs}s ease-out forwards"></div>
+    </div>
+  </div>
+</div>
+"""
+LOADING_SECONDS = 1.1
+
+
+def _loading_screen(title: str) -> None:
+    """A short full-screen 'Preparing your receipt' moment between the click and the receipt, so the
+    user sees the button worked. Drawn by push() just before the page reloads into the receipt."""
+    try:
+        st.markdown(LOADING_HTML.format(title=esc(title), secs=LOADING_SECONDS), unsafe_allow_html=True)
+        time.sleep(LOADING_SECONDS)
+    except Exception:          # purely cosmetic - never let it block the save that already happened
+        pass
 
 
 def _body(r: dict) -> None:

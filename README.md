@@ -51,6 +51,11 @@ Manual start for developers: `python launch.py`, or
 `pip install -r requirements.txt` then `streamlit run app.py`.
 </details>
 
+### Put it on the web
+
+Free hosting on **Streamlit Community Cloud** straight from this GitHub repository (main file
+`app.py`, Python 3.13) - step by step, with safety settings, in `HOW TO HOST.md`.
+
 ### New in v18
 
 - **Late-payment alert** in the sidebar on every page, a reminder after sign-in, and a

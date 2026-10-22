@@ -82,6 +82,15 @@ CREATE TRIGGER IF NOT EXISTS loan_events_no_update BEFORE UPDATE ON loan_events
 BEGIN SELECT RAISE(ABORT, 'loan events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS loan_events_no_delete BEFORE DELETE ON loan_events
 BEGIN SELECT RAISE(ABORT, 'loan events are append-only'); END;
+
+-- Per-user "last opened" time of each loan, for the "new record" dot on Loan book > Loans.
+-- loan_id '*' = the moment the user first opened the Loans tab (older records are not "new").
+CREATE TABLE IF NOT EXISTS loan_seen (
+    username  TEXT NOT NULL,
+    loan_id   TEXT NOT NULL,
+    seen_ts   TEXT NOT NULL,
+    PRIMARY KEY (username, loan_id)
+);
 """
 
 
@@ -249,6 +258,37 @@ def all_events() -> pd.DataFrame:
     conn = _conn()
     try:
         return pd.read_sql_query("SELECT * FROM loan_events ORDER BY id", conn)
+    finally:
+        conn.close()
+
+
+# ---- "new record" markers -------------------------------------------------------------------
+def unseen_loans(username: str) -> dict[str, int]:
+    """{loan_id: number of records saved since this user last opened that loan}. Records saved
+    before the user's first visit to the Loans tab never count as new."""
+    conn = _conn()
+    try:
+        conn.execute("INSERT OR IGNORE INTO loan_seen (username, loan_id, seen_ts) VALUES (?, '*', ?)",
+                     (username, _now()))
+        conn.commit()
+        rows = conn.execute(
+            "SELECT e.loan_id, COUNT(*) FROM loan_events e "
+            "JOIN loan_seen b ON b.username = ? AND b.loan_id = '*' "
+            "LEFT JOIN loan_seen s ON s.username = ? AND s.loan_id = e.loan_id "
+            "WHERE e.ts > b.seen_ts AND (s.seen_ts IS NULL OR e.ts > s.seen_ts) "
+            "GROUP BY e.loan_id", (username, username)).fetchall()
+        return {r[0]: int(r[1]) for r in rows}
+    finally:
+        conn.close()
+
+
+def mark_seen(username: str, loan_id: str) -> None:
+    conn = _conn()
+    try:
+        conn.execute("INSERT INTO loan_seen (username, loan_id, seen_ts) VALUES (?, ?, ?) "
+                     "ON CONFLICT(username, loan_id) DO UPDATE SET seen_ts = excluded.seen_ts",
+                     (username, loan_id, _now()))
+        conn.commit()
     finally:
         conn.close()
 

@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src import analytics as an
+from views._filters import filter_bar
 from src import ui
 from src.security import to_safe_csv
 from src.state import RISK_ORDER, ctx
@@ -42,7 +43,7 @@ def render() -> None:
         "from the portfolio average.",
         eyebrow="Portfolio",
     )
-    ui.context_bar(f"{len(view):,} of {len(book):,} applications", c.chips)
+    filter_bar(c)
 
     if len(view) < 10:
         ui.note("Too few applications in this selection to segment meaningfully.",

@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src import analytics as an
+from views._filters import filter_bar
 from src import ui
 from src.state import ctx
 
@@ -41,7 +42,7 @@ def render() -> None:
         "book rather than assumed.",
         eyebrow="Portfolio",
     )
-    ui.context_bar(f"{len(view):,} of {len(book):,} applications", c.chips)
+    filter_bar(c)
 
     if len(view) < 30:
         ui.note("Too few applications for a stable correlation. Widen the filters.",

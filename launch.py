@@ -109,7 +109,8 @@ def run_app(python: str) -> None:
     threading.Thread(target=open_browser_when_ready, args=(port,), daemon=True).start()
     try:
         subprocess.run([python, "-m", "streamlit", "run", str(ROOT / "app.py"),
-                        "--server.port", str(port), "--server.headless", "true",
+                        "--server.port", str(port), "--server.address", "127.0.0.1",
+                        "--server.headless", "true",
                         "--browser.gatherUsageStats", "false"], cwd=str(ROOT))
     except KeyboardInterrupt:
         pass

@@ -23,6 +23,23 @@ import streamlit.components.v1 as components
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+
+def _settings_from_hosting_secrets() -> None:
+    """On a hosting service (e.g. Streamlit Community Cloud) the CREDIT_DESK_* switches are typed
+    into its Secrets box (.streamlit/secrets.toml). Copy them into the environment BEFORE the app
+    modules read them. A variable already set in the real environment wins; no secrets = no-op."""
+    import os
+    try:
+        items = dict(st.secrets)
+    except Exception:                      # no secrets file: running locally
+        return
+    for key, value in items.items():
+        if key.startswith("CREDIT_DESK_") and key not in os.environ and not isinstance(value, dict):
+            os.environ[key] = str(value)
+
+
+_settings_from_hosting_secrets()
+
 from src import state, ui  # noqa: E402
 from src import auth  # noqa: E402
 from src.mode import login_required  # noqa: E402
@@ -138,15 +155,16 @@ else:
 # =========================================================================================
 # NAVIGATION RAIL
 # =========================================================================================
-def filters() -> None:
-    """Portfolio filters. Analysis pages read these; decisioning pages score independently."""
+def user_panel() -> None:
+    """Who is signed in, Sign out, and the source / version footer - bottom of the rail.
+    (The portfolio filters are a bar at the top of the pages that use them: views/_filters.py.)"""
     c = state.ctx()
-    book = c.book
     user = auth.current_user()
-
     if login_required():
         st.sidebar.markdown(
-            f'<div class="cd-user"><span class="cd-user-name">{esc(user.display_name)}</span>'
+            f'<div class="cd-user" style="border-top:1px solid rgba(255,255,255,0.12);'
+            f'margin-top:0.9rem;padding-top:0.9rem">'
+            f'<span class="cd-user-name">{esc(user.display_name)}</span>'
             f'<span class="cd-user-role">{esc(user.role_label)}</span></div>',
             unsafe_allow_html=True,
         )
@@ -159,51 +177,6 @@ def filters() -> None:
                  "this many idle minutes (safer on a shared computer).")
         if auth.demo_mode():
             st.sidebar.warning("Trial mode: simple passwords. Not for real data.")
-
-    st.sidebar.markdown('<div class="cd-rail-label">Portfolio filters</div>',
-                        unsafe_allow_html=True)
-
-    if c.has_dates:
-        st.sidebar.selectbox("Period", state.PERIODS, key="f_period",
-                             help="Presets count back from the latest application in the book.")
-        if st.session_state.get("f_period") == "Custom range":
-            lo, hi = book["application_date"].min().date(), book["application_date"].max().date()
-            kw = {} if "f_custom" in st.session_state else {"value": (lo, hi)}
-            st.sidebar.date_input("From - to", min_value=lo, max_value=hi, key="f_custom",
-                                  format="DD/MM/YYYY", **kw)
-        if c.period is not None:
-            st.sidebar.markdown(
-                f'<div style="color:#8FB8B2;font-size:0.74rem;margin:-0.4rem 0 0.5rem 0;">'
-                f"{esc(state.fmt_bounds(c.period))}</div>", unsafe_allow_html=True)
-
-    st.sidebar.multiselect(
-        "Property area", sorted(book["property_area"].unique()),
-        key="f_area", format_func=lambda v: v.title(),
-        placeholder="All areas",
-    )
-    st.sidebar.multiselect(
-        "Employment", sorted(book["employment_status"].unique()),
-        key="f_emp", format_func=lambda v: v.replace("_", "-").title(),
-        placeholder="All types",
-    )
-    st.sidebar.multiselect(
-        "Risk tier", state.RISK_ORDER, key="f_risk", placeholder="All tiers",
-    )
-    st.sidebar.selectbox(
-        "Outcome", ["All", "Approved only", "Declined only"], key="f_outcome",
-    )
-
-    n = len(c.view)
-    share = n / len(book) * 100 if len(book) else 0
-    st.sidebar.markdown(
-        f'<div style="color:#8FB8B2;font-size:0.78rem;padding:0.5rem 0 0.35rem 0;">'
-        f"<b style='color:#FFFFFF'>{n:,}</b> of {len(book):,} applications "
-        f"({share:.0f}%)</div>",
-        unsafe_allow_html=True,
-    )
-    if c.filtered:
-        st.sidebar.button("Clear filters", on_click=state.reset_filters)
-
     st.sidebar.markdown(
         f'<div style="color:#6E9A94;font-size:0.72rem;padding:1.1rem 0 0.3rem 0;'
         f'border-top:1px solid rgba(255,255,255,0.12);margin-top:0.9rem;">'
@@ -256,7 +229,7 @@ def _toggle_nav_group(group: str) -> None:
     st.session_state[key] = not st.session_state.get(key, True)
 
 
-def render_nav(visible: dict, page_objs: dict) -> None:
+def render_nav(visible: dict, page_objs: dict, late_customers: int = 0) -> None:
     """
     Our own collapsible nav rail, drawn in place of st.navigation's built-in menu.
 
@@ -278,6 +251,9 @@ def render_nav(visible: dict, page_objs: dict) -> None:
             )
         if is_open:
             for title, slug, _fn in items:
+                if slug == "loanbook" and late_customers:
+                    # Red count badge: how many customers are late, visible from every page.
+                    title = f"{title}  :red-badge[{late_customers} late]"
                 st.sidebar.page_link(page_objs[group][slug], label=title)
 
 
@@ -308,7 +284,10 @@ def _load_sample_data() -> None:
 
 
 # =========================================================================================
-# LATE-PAYMENT NOTIFICATION (sidebar card on every page + one pop-up reminder per sign-in)
+# LATE-PAYMENT NOTIFICATION
+# A red count badge on "Loan book" in the menu (always visible, takes no space) plus one
+# slim alert bar across the top of the page - where the eye lands first - with a button
+# straight to the list. The bar can be hidden for the rest of the session; the badge stays.
 # =========================================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def _late_counts(signature: tuple, day: str) -> tuple[dict, int]:
@@ -318,40 +297,51 @@ def _late_counts(signature: tuple, day: str) -> tuple[dict, int]:
     return notifications.summary(notifications.overdue(book, day)), len(notifications.due_soon(book, day, 3))
 
 
-def _late_payment_alert(loan_page=None) -> None:
+def _late_status() -> tuple[dict, int] | None:
     from src import notifications
     from src.data_pipeline import today_local
     try:
-        s, soon = _late_counts(notifications.signature(), today_local().date().isoformat())
+        return _late_counts(notifications.signature(), today_local().date().isoformat())
     except Exception:                       # a notification must never break a page
+        return None
+
+
+SEVERITY_CHIP = {"Default": ("#FFFFFF", "#912018"), "Serious": ("#FFFFFF", "#C4320A"),
+                 "Warning": ("#7A2E0E", "#FEDF89"), "Reminder": ("#344054", "#EAECF0")}
+
+
+def _hide_late_banner() -> None:
+    st.session_state["_late_banner_hidden"] = True
+
+
+def _late_banner(status, loan_page=None, on_loan_page: bool = False) -> None:
+    """The alert bar at the top of the page. Not drawn on Loan book itself (its first tab
+    is the full list) or after the user hides it for this session."""
+    if not status or on_loan_page or st.session_state.get("_late_banner_hidden"):
         return
-    if not s["loans"] and not soon:
-        return
+    s, soon = status
     if s["loans"]:
         sev = s["by_severity"]
-        parts = [f"{sev[k]} {k.lower()}" for k in ("Default", "Serious", "Warning", "Reminder") if sev[k]]
-        red, dark, grey = "color:#B42318", "color:#7A271A", "color:#5B6879"
-        st.sidebar.markdown(
-            '<div class="cd-late" style="background:#FDECEA;border:1px solid #F4B4AE;border-left:5px solid #B42318;'
-            'border-radius:8px;padding:9px 11px;margin:6px 0 4px 0;font-size:0.82rem;line-height:1.35">'
-            f'<div style="font-weight:700;font-size:0.9rem;{red}">&#128276; {s["customers"]} customer(s) '
-            f'late on payment</div>'
-            f'<div style="{dark}"><b style="{dark}">{ui.money(s["arrears"])}</b> overdue on {s["loans"]} loan(s)</div>'
-            f'<div style="{dark}">{esc(", ".join(parts))}</div>'
-            + (f'<div style="{grey};margin-top:3px">{soon} more due in the next 3 days</div>' if soon else "")
-            + '</div>', unsafe_allow_html=True)
-        if loan_page is not None:
-            st.sidebar.page_link(loan_page, label="Open late payments")
-        if not st.session_state.get("_late_toast_shown"):
-            st.session_state["_late_toast_shown"] = True
-            if hasattr(st, "toast"):
-                st.toast(f"{s['customers']} customer(s) are late on payment - {ui.money(s['arrears'])} overdue. "
-                         "See Loan book -> Late payments.", icon="🔔")
+        chips = "".join(
+            f'<span class="cd-late-chip" style="color:{fg};background:{bg}">{sev[k]} {k.lower()}</span>'
+            for k, (fg, bg) in SEVERITY_CHIP.items() if sev.get(k))
+        text = (f'<div class="cd-late-title">&#128276; {s["customers"]} customer(s) are late on payment</div>'
+                f'<div class="cd-late-body"><b>{ui.money(s["arrears"])}</b> overdue on {s["loans"]} loan(s)'
+                + (f' &middot; {soon} more due in the next 3 days' if soon else "")
+                + f'</div><div class="cd-late-chips">{chips}</div>')
+        tone = "cd-late-red"
     elif soon:
-        st.sidebar.markdown(
-            '<div style="background:#FEF4E6;border-left:5px solid #B54708;border-radius:8px;padding:8px 11px;'
-            f'margin:6px 0 4px 0;font-size:0.82rem"><span style="color:#7A2E0E">&#128276; {soon} payment(s) due in '
-            'the next 3 days. No customer is late.</span></div>', unsafe_allow_html=True)
+        text = (f'<div class="cd-late-title">&#128276; {soon} payment(s) due in the next 3 days</div>'
+                '<div class="cd-late-body">No customer is late. A reminder call now keeps it that way.</div>')
+        tone = "cd-late-amber"
+    else:
+        return
+    with st.container(key=f"cd_late_banner_{tone}"):
+        left, mid, right = st.columns([5.2, 1.7, 0.45], vertical_alignment="center", gap="small")
+        left.markdown(text, unsafe_allow_html=True)
+        if loan_page is not None:
+            mid.page_link(loan_page, label="Open late payments  →")
+        right.button("✕", key="_late_hide", on_click=_hide_late_banner, help="Hide for this session")
 
 
 def run() -> None:
@@ -375,9 +365,11 @@ def run() -> None:
         }
         flat_pages = [p for group_pages in page_objs.values() for p in group_pages.values()]
         page = st.navigation(flat_pages, position="hidden")
-        render_nav(visible, page_objs)
-        _late_payment_alert(page_objs.get("Portfolio", {}).get("loanbook"))
-        filters()
+        late = _late_status()
+        render_nav(visible, page_objs, late_customers=late[0]["customers"] if late else 0)
+        user_panel()
+        loan_page = page_objs.get("Portfolio", {}).get("loanbook")
+        _late_banner(late, loan_page, on_loan_page=getattr(page, "url_path", "") == "loanbook")
         _result.render_pending()
         page.run()
     elif hasattr(st, "navigation"):
@@ -391,16 +383,16 @@ def run() -> None:
             for group, items in visible.items()
         }
         page = st.navigation(nav)
-        _late_payment_alert()
-        filters()
+        user_panel()
+        _late_banner(_late_status())
         _result.render_pending()
         page.run()
     else:
         # Older Streamlit still: fall back to a flat radio rail so the app still runs.
         flat = {title: fn for items in visible.values() for title, _, fn in items}
         choice = st.sidebar.radio("Navigate", list(flat.keys()), label_visibility="collapsed")
-        _late_payment_alert()
-        filters()
+        user_panel()
+        _late_banner(_late_status())
         _result.render_pending()
         flat[choice]()
 

@@ -14,7 +14,6 @@ from src.data_pipeline import today_local
 from views import _result
 from src.deps import MissingLibrary
 from src.security import to_safe_csv
-from views._docs import render_documents
 
 
 def _book(asof: date) -> pd.DataFrame:
@@ -36,13 +35,15 @@ def render() -> None:
 
     late = notifications.overdue(book, asof)
     late_label = f"🔔 Late payments ({len(late)})" if len(late) else "Late payments"
-    tabs = st.tabs([late_label, "Overview", "Loans", "Add a loan", "Stress and limits", "Reports"])
+    unseen = loanbook.unseen_loans(user.username)          # loans with records you have not opened yet
+    loans_label = f"Loans 🔵 {len(unseen)} new" if unseen else "Loans"
+    tabs = st.tabs([late_label, "Overview", loans_label, "Add a loan", "Stress and limits", "Reports"])
     with tabs[0]:
         _late(book, late, user, asof)
     with tabs[1]:
         _overview(book, settings, asof)
     with tabs[2]:
-        _loans(book, user, asof)
+        _loans(book, user, asof, unseen)
     with tabs[3]:
         _add(user, settings)
     with tabs[4]:
@@ -132,6 +133,77 @@ def _upcoming(book: pd.DataFrame, asof: date) -> None:
 
 
 # ----------------------------------------------------------------------------- late payments
+def _or_none(v) -> str:
+    return "none" if v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip() in ("", "nan", "NaT") else str(v)
+
+
+FOLLOW_UP = {  # tag -> (text colour, background)
+    "Promised - not paid yet": ("#7A2E0E", "#FEF0C7"),
+    "Part-paid - still overdue": ("#1D4F7A", "#E3EEF8"),
+    "Contacted - not paid yet": ("#344054", "#EAECF0"),
+    "Not contacted yet": ("#912018", "#FEE4E2"),
+}
+
+
+def follow_up_tags(late: pd.DataFrame) -> dict[str, str]:
+    """{loan_id: follow-up tag} for every late loan, from the latest promise / note / payment
+    recorded since its oldest unpaid instalment fell due. A tag never removes the customer from
+    the late list - only money does (a payment that covers the overdue amount, or Paid)."""
+    if late.empty:
+        return {}
+    ev = loanbook.all_events()
+    out = {}
+    for r in late.itertuples():
+        since = str(r.oldest_unpaid_due)[:10]
+        e = ev[(ev["loan_id"] == r.loan_id) & (ev["event_date"].astype(str) >= since)
+               & ev["kind"].isin(["promise", "note", "payment"])] if len(ev) else ev
+        if e is None or e.empty:
+            out[r.loan_id] = "Not contacted yet"
+            continue
+        last = e.sort_values(["event_date", "id"]).iloc[-1]["kind"]
+        out[r.loan_id] = {"promise": "Promised - not paid yet", "payment": "Part-paid - still overdue",
+                          "note": "Contacted - not paid yet"}[last]
+    return out
+
+
+def _tag_html(tag: str) -> str:
+    fg, bg = FOLLOW_UP[tag]
+    return (f'<span style="display:inline-block;font-size:0.78rem;font-weight:600;color:{fg};background:{bg};'
+            f'border-radius:999px;padding:0.1rem 0.6rem">{tag}</span>')
+
+
+def _history(loan: dict, ev: pd.DataFrame, snap: dict, user, key: str) -> None:
+    """The customer's history (the same records whichever tab saved them), with the Paid button
+    on top so it is never pushed below a long table."""
+    if snap["status"] == "Active" and snap["arrears"] > loanbook.TOL:
+        owed = round(float(snap["arrears"]), 2)
+        with st.popover("✅ Paid", help="The customer has paid the overdue amount in full"):
+            st.markdown(f"Record that **{loan['customer_ref']}** paid the overdue amount "
+                        f"**{owed:,.2f}** today? This saves a payment, prints a receipt and removes the "
+                        f"customer from the late-payment list.")
+            if st.button(f"Confirm: {owed:,.2f} received", key=f"{key}_paid_{loan['loan_id']}", type="primary"):
+                _mark_paid(loan, owed, user)
+    if ev.empty:
+        st.caption("No payments or notes yet.")
+    else:
+        h = ev[["event_date", "kind", "amount", "username", "detail"]].iloc[::-1].rename(columns={
+            "event_date": "Date", "kind": "Record", "amount": "Amount", "username": "By", "detail": "Note"})
+        ui.table(h.style.format({"Amount": "{:,.2f}"}), hide_index=True, height=min(38 + 35 * len(h), 320))
+
+
+def _mark_paid(loan: dict, owed: float, user) -> None:
+    lid = loan["loan_id"]
+    today = date.today()
+    try:
+        before = loanbook.snapshot(loan, loanbook.events_for(lid), today)
+        eid = loanbook.add_event(lid, username=user.username, role=user.role, kind="payment", event_date=today,
+                                 amount=owed, detail="Paid - overdue amount received in full")
+        _push_event_result(loan, "payment", eid, before, today, owed, "Paid - overdue amount received in full", user)
+        st.rerun()
+    except (ValueError, PermissionError, audit.AuditError) as exc:
+        st.error(str(exc))
+
+
 def _late(book: pd.DataFrame, late: pd.DataFrame, user, asof: date) -> None:
     ui.section("Late payment notifications",
                "Every active loan with an unpaid instalment, most urgent first. Open a customer to download "
@@ -161,7 +233,15 @@ def _late(book: pd.DataFrame, late: pd.DataFrame, user, asof: date) -> None:
         {"Default": 90, "Serious": 60, "Warning": 30, "Reminder": 1, "Overdue today": 0}[k])[1])
         for k, n in s["by_severity"].items() if n)
     st.markdown(tags, unsafe_allow_html=True)
+    tags_by_loan = follow_up_tags(view)
+    view = view.assign(follow_up=view["loan_id"].map(tags_by_loan))
+    first = ["loan_id", "customer_ref", "follow_up"]
+    view = view[first + [c for c in view.columns if c not in first]]
+    counts = pd.Series(list(tags_by_loan.values())).value_counts()
+    st.markdown(" ".join(_tag_html(t) + f'<span style="color:#5B6879;font-size:0.8rem"> {int(counts[t])}</span>'
+                         for t in FOLLOW_UP if t in counts), unsafe_allow_html=True)
     shown = view.drop(columns=["action", "bucket"]).rename(columns={
+        "follow_up": "Follow-up",
         "loan_id": "Loan", "customer_ref": "Customer", "product": "Product", "severity": "Level",
         "dpd": "Days late", "arrears": "Overdue amount", "outstanding": "Remaining balance",
         "instalments_missed": "Unpaid instalments", "oldest_unpaid_due": "Oldest unpaid due",
@@ -170,7 +250,7 @@ def _late(book: pd.DataFrame, late: pd.DataFrame, user, asof: date) -> None:
              hide_index=True)
 
     ui.section("Customer")
-    labels = [f"{r.customer_ref} - {r.loan_id} - {r.dpd} days late - {r.arrears:,.2f} overdue"
+    labels = [f"{r.customer_ref} - {r.loan_id} - {r.dpd} days late - {r.arrears:,.2f} overdue - {r.follow_up}"
               for r in view.itertuples()]
     if not labels:
         return
@@ -180,11 +260,11 @@ def _late(book: pd.DataFrame, late: pd.DataFrame, user, asof: date) -> None:
     st.markdown(
         f'<div style="border:1px solid #D5DCE3;border-left:6px solid {colour};border-radius:8px;padding:12px 14px;'
         f'background:#FFFFFF;margin-bottom:8px"><div style="font-weight:700;color:{colour}">{label} - '
-        f'{int(row["dpd"])} day(s) late</div><div style="color:#1B2430;margin-top:4px">'
+        f'{int(row["dpd"])} day(s) late &nbsp;{_tag_html(row["follow_up"])}</div><div style="color:#1B2430;margin-top:4px">'
         f'<b>{ui.money(float(row["arrears"]))}</b> overdue on {int(row["instalments_missed"])} instalment(s) '
         f'(oldest due {row["oldest_unpaid_due"]}). Remaining balance {ui.money(float(row["outstanding"]))}.</div>'
-        f'<div style="color:#5B6879;margin-top:4px">Last payment: {row["last_payment"] or "none"} &middot; '
-        f'Last promise: {row["last_promise"] or "none"}</div>'
+        f'<div style="color:#5B6879;margin-top:4px">Last payment: {_or_none(row["last_payment"])} &middot; '
+        f'Last promise: {_or_none(row["last_promise"])}</div>'
         f'<div style="color:#1B2430;margin-top:6px"><b>What to do:</b> {action}</div></div>',
         unsafe_allow_html=True)
     if reports.HAVE_PDF:
@@ -200,22 +280,44 @@ def _late(book: pd.DataFrame, late: pd.DataFrame, user, asof: date) -> None:
     else:
         ui.note(str(MissingLibrary("reportlab")), title="PDF notice unavailable", tone="warn")
     loan = loanbook.get_loan(row["loan_id"])
+    ev = loanbook.events_for(row["loan_id"])
+    snap = loanbook.snapshot(loan, ev, max(asof, date.today()))
+    st.markdown(f"**History of {loan['customer_ref']} ({loan['loan_id']})** - the same records as "
+                "Loans > this loan > History, whichever tab saved them")
+    _history(loan, ev, snap, user, key="late")
     st.markdown("**Record a payment, a promise to pay or a call note for this customer**")
+    st.caption("payment: reduces the overdue amount - the customer leaves this list once it is fully paid. "
+               "promise / note: kept in the history and shown as a tag; the customer stays on the list "
+               "until the money is paid. Paid: the customer paid the whole overdue amount.")
     _event_forms(loan, user, key_prefix="late")
 
 
-def _loans(book: pd.DataFrame, user, asof: date) -> None:
+def _loans(book: pd.DataFrame, user, asof: date, unseen: dict | None = None) -> None:
     if book.empty:
         st.caption("No loans yet.")
         return
+    unseen = unseen or {}
     view = book[["loan_id", "customer_ref", "product", "principal", "outstanding", "status", "dpd", "bucket",
                  "stage", "arrears", "disbursed_on", "next_due", "next_amount", "maturity_date",
                  "months_on_book", "remaining_instalments"]]
+    view = view.assign(new=view["loan_id"].map(lambda l: f"🔵 {unseen[l]}" if l in unseen else ""))
+    view = view[["new"] + [c for c in view.columns if c != "new"]].rename(columns={"new": "New"})
+    view = view.assign(_n=view["New"] != "").sort_values("_n", ascending=False, kind="stable").drop(columns="_n")
+    if unseen:
+        st.markdown(f'<div style="color:#1D4F7A;font-size:0.88rem;margin-bottom:4px">🔵 = a record was saved on '
+                    f'this loan since you last opened it ({len(unseen)} loan(s)). Opening the loan clears the dot.'
+                    f'</div>', unsafe_allow_html=True)
     ui.table(view, hide_index=True)
-    lid = st.selectbox("Open a loan", book["loan_id"].tolist(), key="lb_open")
+    ids = book["loan_id"].tolist()
+    lid = st.selectbox("Open a loan", ids, key="lb_open",
+                       format_func=lambda l: f"🔵 {l} - {unseen[l]} new record(s)" if l in unseen else l)
     loan = loanbook.get_loan(lid)
     ev = loanbook.events_for(lid)
     snap = loanbook.snapshot(loan, ev, asof)
+    if lid in unseen:
+        ui.note(f"{unseen[lid]} new record(s) on this loan since you last opened it - see History below "
+                f"(newest first).", title="🔵 Updated", tone="info")
+    loanbook.mark_seen(user.username, lid)
     c = st.columns(4, gap="small")
     with c[0]:
         ui.kpi("Outstanding", ui.money(snap["outstanding"]))
@@ -229,14 +331,10 @@ def _loans(book: pd.DataFrame, user, asof: date) -> None:
     with st.expander("Repayment schedule"):
         ui.table(loanbook.schedule(loan, ev), hide_index=True)
     ui.section("History")
-    if ev.empty:
-        st.caption("No payments or notes yet.")
-    else:
-        ui.table(ev[["event_date", "kind", "amount", "username", "detail"]], hide_index=True)
+    _history(loan, ev, snap, user, key="lb")
 
     if snap["status"] == "Active":
         _event_forms(loan, user)
-    render_documents(lid, key=f"lb_docs_{lid}")
 
 
 def _event_forms(loan: dict, user, key_prefix: str = "lb") -> None:

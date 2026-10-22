@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src import decisioning as dec
+from views._filters import filter_bar
 from src import ui
 from src.state import RISK_ORDER, ctx
 
@@ -21,7 +22,7 @@ def render() -> None:
         "Approval performance, exposure and risk concentration across the current book.",
         eyebrow="Portfolio",
     )
-    ui.context_bar(f"{len(view):,} of {len(book):,} applications", c.chips)
+    filter_bar(c)
 
     if view.empty:
         ui.note(

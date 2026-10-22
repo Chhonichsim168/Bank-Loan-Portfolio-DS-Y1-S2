@@ -55,16 +55,25 @@ def render_documents(case_id: str, key: str) -> None:
             b.download_button("Download", data, file_name=label, mime=mime, key=f"{key}_dl_{r.id}")
         except (ValueError, FileNotFoundError) as exc:
             b.error(str(exc))
-    with st.form(f"{key}_attach", clear_on_submit=True, border=True):
-        kind = st.selectbox("Document type", documents.KINDS)
-        up = st.file_uploader("File", type=["pdf", "png", "jpg", "jpeg"])
-        go = st.form_submit_button("Attach")
-    if go:
+    # Choose a file -> the document type is read from the file automatically -> Attach.
+    # The user never picks the type by hand, so it cannot be mislabelled by mistake.
+    n = st.session_state.get(f"{key}_upload_n", 0)          # bumped after each attach to clear the box
+    with st.container(border=True):
+        up = st.file_uploader("Choose a file (PDF, PNG or JPG, up to 10 MB)", type=["pdf", "png", "jpg", "jpeg"],
+                              key=f"{key}_file_{n}")
         if up is None:
-            st.error("Choose a file first.")
-        else:
+            st.caption("The document type (Identity, Income proof, Bank statement, Collateral / valuation, "
+                       "Contract or Other) is detected from the file automatically.")
+            return
+        kind, why = documents.detect_kind(up.name, up.getvalue())
+        st.markdown(
+            f'<div style="background:#E7F4EE;border:1px solid #B7DFCB;border-radius:8px;padding:8px 12px;'
+            f'margin:2px 0 8px 0;color:#14532D">Document type detected: <b>{kind}</b>'
+            f'<span style="color:#3F6B55"> &middot; {why}</span></div>', unsafe_allow_html=True)
+        if st.button(f"Attach as {kind}", key=f"{key}_attach_{n}", type="primary"):
             try:
                 documents.attach(case_id, up.getvalue(), up.name, kind, user.username, user.role)
+                st.session_state[f"{key}_upload_n"] = n + 1
                 st.success("Attached.")
                 st.rerun()
             except (ValueError, audit.AuditError) as exc:

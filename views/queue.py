@@ -9,7 +9,6 @@ import streamlit as st
 
 from src import audit, auth, reports, ui, workflow
 from src.mode import single_operator
-from views._docs import render_documents
 from src.data_pipeline import to_local, today_local
 from src.security import esc, to_safe_csv
 
@@ -141,7 +140,6 @@ def _case(row: pd.Series) -> None:
         st.write(row["rationale"] or "(none)")
         if isinstance(row["reviewer"], str):
             st.markdown(f"**Reviewed by {esc(row['reviewer'])}:** {esc(row['review_verdict'])} - {esc(row['review_comment'])}")
-    render_documents(row["application_id"], key=f"q_docs_{row['application_id']}")
 
 
 def _review_panel(df: pd.DataFrame, user) -> None:

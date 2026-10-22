@@ -492,7 +492,7 @@ span[data-testid="stIconMaterial"] {{
 }}
 .cd-brand-sub {{ color: #8FB8B2; font-size: 0.755rem; margin-top: 0.1rem; }}
 
-/* ---- Signed-in user badge, top of the sidebar filters ------------------------ */
+/* ---- Signed-in user badge, bottom of the sidebar ---------------------------- */
 .cd-user {{
     display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem;
     padding: 0.15rem 0.75rem 0.6rem 0.75rem;
@@ -518,6 +518,81 @@ span[data-testid="stIconMaterial"] {{
     color: #7FA9A3; font-size: 0.72rem; font-weight: 600;
     padding: 0.9rem 0.75rem 0.25rem 0.75rem;
 }}
+
+/* ---- Portfolio filter bar (top of Overview / Segments / Drivers / Policy) --------- */
+.st-key-cd_filterbar {{
+    background: #FFFFFF; border: 1px solid #DCE3E1; border-radius: 12px;
+    padding: 0.85rem 1.1rem 0.8rem 1.1rem; margin: 0.35rem 0 1.4rem 0;
+    box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+}}
+.cd-fb-title {{
+    color: {BRAND}; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; margin-bottom: 0.1rem;
+}}
+.st-key-cd_filterbar [data-testid="stWidgetLabel"] p {{
+    font-size: 0.78rem !important; color: {INK_SOFT} !important; font-weight: 600;
+}}
+.st-key-cd_fb_result {{
+    border-top: 1px solid #EEF2F1; padding-top: 0.65rem; margin-top: 0.1rem; row-gap: 0.4rem;
+}}
+.cd-fb-count {{ margin-right: 0.6rem; line-height: 1.1; white-space: nowrap; }}
+.cd-fb-n {{ font-size: 1.55rem; font-weight: 700; color: #14302C; letter-spacing: -0.01em; }}
+.cd-fb-of {{ font-size: 0.86rem; color: {INK_SOFT}; }}
+.cd-fb-whole {{
+    display: inline-block; font-size: 0.8rem; color: {INK_SOFT}; border: 1px dashed #C9D3D1;
+    border-radius: 999px; padding: 0.15rem 0.7rem;
+}}
+.st-key-cd_fb_result .stButton button {{
+    background: #E4EFEC; color: #0B5C54; border: 1px solid #C7E0DB; border-radius: 999px;
+    font-size: 0.8rem; font-weight: 600; padding: 0.12rem 0.75rem; min-height: 0; line-height: 1.6;
+}}
+.st-key-cd_fb_result .stButton button p {{ font-size: 0.8rem !important; }}
+.st-key-cd_fb_result .stButton button:hover {{
+    background: #FDECEA; color: #B42318; border-color: #F4B4AE;
+}}
+.st-key-cd_chip_clear_all button {{
+    background: transparent !important; border: none !important; color: #B42318 !important;
+    text-decoration: underline; font-weight: 600;
+}}
+.st-key-cd_chip_clear_all button:hover {{ background: transparent !important; color: #912018 !important; }}
+
+/* ---- Late-payment alert bar (top of the page) -------------------------------------- */
+[class*="st-key-cd_late_banner_"] {{
+    border-radius: 10px; padding: 0.8rem 0.9rem 0.95rem 1.1rem; margin: 0 0 1.1rem 0;
+}}
+/* Red count badge on "Loan book" in the menu */
+[data-testid="stSidebar"] .stMarkdownBadge {{
+    background-color: #F04438 !important; color: #FFFFFF !important; font-weight: 700;
+    font-size: 0.7rem !important; border-radius: 999px; padding: 0.05rem 0.5rem; margin-left: 0.35rem;
+}}
+.st-key-cd_late_banner_cd-late-red {{
+    background: #FEF3F2; border: 1px solid #FECDCA; border-left: 6px solid #B42318;
+}}
+.st-key-cd_late_banner_cd-late-amber {{
+    background: #FFFAEB; border: 1px solid #FEDF89; border-left: 6px solid #B54708;
+}}
+.cd-late-title {{ font-weight: 700; font-size: 1rem; color: #912018; line-height: 1.35; }}
+.st-key-cd_late_banner_cd-late-amber .cd-late-title {{ color: #93370D; }}
+.cd-late-body {{ color: #55160C; font-size: 0.88rem; margin-top: 0.15rem; }}
+.st-key-cd_late_banner_cd-late-amber .cd-late-body {{ color: #7A2E0E; }}
+.cd-late-body b {{ color: #55160C; }}
+.cd-late-chips {{ margin-top: 0.4rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }}
+.cd-late-chip {{
+    display: inline-block; font-size: 0.74rem; font-weight: 600; padding: 0.12rem 0.55rem;
+    border-radius: 999px; line-height: 1.4;
+}}
+[class*="st-key-cd_late_banner_"] [data-testid="stPageLink"] a {{
+    background: #B42318; border-radius: 8px; padding: 0.45rem 0.9rem; justify-content: center;
+}}
+[class*="st-key-cd_late_banner_"] [data-testid="stPageLink"] a p {{
+    color: #FFFFFF !important; font-weight: 600; font-size: 0.88rem; white-space: nowrap;
+}}
+[class*="st-key-cd_late_banner_"] [data-testid="stPageLink"] a:hover {{ background: #912018; }}
+[class*="st-key-cd_late_banner_"] .stButton button {{
+    background: transparent; border: none; box-shadow: none; color: #912018; min-height: 0;
+    padding: 0.2rem 0.4rem;
+}}
+[class*="st-key-cd_late_banner_"] .stButton button:hover {{ background: rgba(180,35,24,0.08); color: #55160C; }}
 
 /* ---- Page header ------------------------------------------------------------- */
 .cd-eyebrow {{ color: {BRAND}; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.1rem; }}

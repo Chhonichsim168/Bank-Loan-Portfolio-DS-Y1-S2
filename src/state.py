@@ -190,6 +190,12 @@ def init() -> None:
     _ss("f_risk", [])
     _ss("f_outcome", "All")
     _ss("f_period", "All time")
+    # The filter bar is drawn only on the pages that use it. Writing each value back keeps it
+    # when the user visits a page without the bar (Streamlit otherwise forgets a widget's value
+    # on a run where the widget is not drawn).
+    for k in ("f_area", "f_emp", "f_risk", "f_outcome", "f_period", "f_custom"):
+        if k in st.session_state:
+            st.session_state[k] = st.session_state[k]
 
 
 def current_policy() -> dec.Policy:

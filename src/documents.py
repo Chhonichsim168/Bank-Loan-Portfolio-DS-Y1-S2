@@ -49,6 +49,40 @@ BEGIN SELECT RAISE(ABORT, 'documents log is append-only'); END;
 KINDS = ["Identity", "Income proof", "Bank statement", "Collateral / valuation", "Contract", "Other"]
 
 
+# Words in the file name (or, for a PDF, its text) that tell what the document is. Checked in
+# this order; the first match wins. Nothing matches -> "Other".
+KIND_WORDS = (
+    ("Identity", ("identity", "id_card", "idcard", "id card", "national_id", "passport", "nid", "kyc",
+                  "identity document")),
+    ("Income proof", ("income", "payslip", "pay_slip", "pay slip", "salary", "payroll", "employment_letter",
+                      "income proof")),
+    ("Bank statement", ("bank_statement", "bank statement", "statement", "bank")),
+    ("Collateral / valuation", ("collateral", "valuation", "appraisal", "land_title", "hard_title",
+                                "property_title", "title_deed")),
+    ("Contract", ("contract", "agreement", "loan_agreement")),
+)
+
+
+def _words(text: str) -> str:
+    return " " + "".join(ch if ch.isalnum() else " " for ch in text.lower()) + " "
+
+
+def detect_kind(file_name: str, content: bytes = b"") -> tuple[str, str]:
+    """(document type, short reason). Reads the file name first, then the start of a PDF."""
+    name = _words(Path(file_name or "").stem)
+    for kind, words in KIND_WORDS:
+        for w in words:
+            if _words(w) in name:
+                return kind, f'the file name contains "{w}"'
+    if content[:4] == b"%PDF":
+        text = _words(content[:200_000].decode("latin-1", errors="ignore"))
+        for kind, words in KIND_WORDS:
+            for w in words:
+                if len(w) > 4 and _words(w) in text:
+                    return kind, f'the document mentions "{w}"'
+    return "Other", "no known keyword in the file name"
+
+
 def _conn():
     conn = audit.connect()
     conn.executescript(_SCHEMA)

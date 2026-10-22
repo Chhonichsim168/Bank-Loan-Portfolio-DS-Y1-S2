@@ -43,6 +43,7 @@ def test_policy_breach_is_enforced_on_the_single_application_page(sandbox):
     """The reviewed bug: this page ignored hard policy. An unemployed applicant with no credit
     history must be routed to Decline whatever the model score."""
     at = page("underwrite").run()
+    at.button(key="uw_fill_example").click().run()       # every field starts empty
     at.selectbox(key="uw_emp").select("unemployed")
     at.selectbox(key="uw_credit").select(0)
     at.run()
@@ -55,6 +56,7 @@ def test_policy_breach_is_enforced_on_the_single_application_page(sandbox):
 def test_decision_is_saved_to_the_database_and_pending_when_it_must_be(sandbox):
     from src import workflow
     at = page("underwrite").run()
+    at.button(key="uw_fill_example").click().run()       # every field starts empty
     at.selectbox(key="uw_emp").select("unemployed")      # policy breach -> approving it is an exception
     at.selectbox(key="uw_credit").select(0)
     at.run()

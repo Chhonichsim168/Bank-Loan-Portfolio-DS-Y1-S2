@@ -9,12 +9,13 @@ font = "sans serif"
 
 [server]
 headless = true
-# Bind to loopback only. In production this sits behind a reverse proxy (see
-# deploy/nginx.conf.example) that terminates TLS and is the only thing exposed to the
-# network — the app itself never speaks HTTPS or listens on a public interface directly.
-address = "127.0.0.1"
+# No fixed address here, so a hosting service (Streamlit Community Cloud, Render, Docker) can
+# serve the app. On your own computer the START file / launch.py binds it to this computer only
+# (--server.address 127.0.0.1). Behind your own server, see deploy/nginx.conf.example.
 enableXsrfProtection = true
 enableCORS = true
+# Supporting documents are limited to 10 MB each (src/documents.py); the upload box says so too.
+maxUploadSize = 10
 
 [browser]
 gatherUsageStats = false

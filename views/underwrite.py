@@ -51,6 +51,14 @@ def render() -> None:
     )
 
     app, extras = _form(c.book)
+    if app is None:
+        todo = missing_fields()
+        done = len(REQUIRED) - len(todo)
+        st.progress(done / len(REQUIRED), text=f"{done} of {len(REQUIRED)} required fields filled in")
+        ui.note("The score, the reasons and the Save button appear once every required field is filled in. "
+                "Still to fill in: <b>" + esc(", ".join(todo)) + "</b>.",
+                title="Fill in the application", tone="info")
+        return
     enriched = dec.enrich_application(app)
 
     if enriched["total_income"] <= 0:
@@ -114,78 +122,122 @@ def _history(ref: str, application_date: str | None) -> None:
 
 
 # -----------------------------------------------------------------------------------------
-def _form(book: pd.DataFrame) -> tuple[dict, dict]:
-    ui.section("Application")
+# Every field starts empty: the officer types each value from the application form, so nothing
+# is scored on a number the system made up. "Fill with an example" puts in a practice case.
+REQUIRED = {  # widget key -> label shown in the "still to fill in" list
+    "uw_income": "Monthly income", "uw_deps": "Dependents", "uw_amount": "Loan amount",
+    "uw_term": "Term", "uw_product": "Product", "uw_credit": "Credit history",
+    "uw_emp": "Employment", "uw_area": "Property area", "uw_score": "Credit score",
+    "uw_late": "Late payments - last 12 months",
+}
+OPTIONAL = ("uw_coincome", "uw_exdebt", "uw_collateral")      # blank = 0
+EXAMPLE = {"uw_income": 5_000, "uw_coincome": 0, "uw_deps": 0, "uw_amount": 120_000, "uw_term": 360,
+           "uw_product": lb.PRODUCTS[0], "uw_exdebt": 0, "uw_collateral": 0, "uw_credit": 1,
+           "uw_emp": "salaried", "uw_area": "urban", "uw_score": 700, "uw_late": 0}
+
+
+def _fill_example() -> None:
+    for k, v in EXAMPLE.items():
+        st.session_state[k] = v
+
+
+def _clear_form() -> None:
+    for k in EXAMPLE:
+        st.session_state[k] = None
+    for k in ("uw_ref", "uw_rationale"):
+        st.session_state[k] = ""
+    st.session_state.pop("uw_saved", None)
+
+
+def missing_fields() -> list[str]:
+    return [label for key, label in REQUIRED.items() if st.session_state.get(key) is None]
+
+
+def _form(book: pd.DataFrame) -> tuple[dict | None, dict]:
+    ui.section("Application", "Fill in every field from the customer's application form. Fields marked "
+                              "(optional) can stay blank and count as 0.")
+    t1, t2, _ = st.columns([1.25, 0.8, 3], gap="small")
+    t1.button("Fill with an example", key="uw_fill_example", on_click=_fill_example,
+              help="Puts in a practice applicant so you can see how the page works.")
+    t2.button("Clear form", key="uw_clear", on_click=_clear_form)
 
     a, b, c = st.columns(3, gap="medium")
+    num = dict(value=None, placeholder="Type a number")
 
     with a:
         st.markdown("**Applicant**")
         applicant_income = st.number_input(
-            "Monthly income", min_value=0, max_value=200_000, value=5_000, step=250,
-            key="uw_income", help="Gross monthly income of the primary applicant.",
+            "Monthly income", min_value=0, max_value=200_000, step=250,
+            key="uw_income", help="Gross monthly income of the primary applicant.", **num,
         )
         coapplicant_income = st.number_input(
-            "Co-applicant monthly income", min_value=0, max_value=200_000, value=0, step=250,
-            key="uw_coincome", help="Enter 0 if there is no co-applicant.",
+            "Co-applicant monthly income (optional)", min_value=0, max_value=200_000, step=250,
+            key="uw_coincome", help="Leave blank or enter 0 if there is no co-applicant.",
+            value=None, placeholder="Blank = 0",
         )
         dependents = st.number_input(
-            "Dependents", min_value=0, max_value=10, value=0, step=1, key="uw_deps",
+            "Dependents", min_value=0, max_value=10, step=1, key="uw_deps", **num,
         )
 
     with b:
         st.markdown("**Facility**")
         loan_amount = st.number_input(
-            "Loan amount", min_value=1_000, max_value=5_000_000, value=120_000, step=5_000,
-            key="uw_amount",
+            "Loan amount", min_value=1_000, max_value=5_000_000, step=5_000,
+            key="uw_amount", **num,
         )
         loan_term_months = st.selectbox(
-            "Term", TERMS, index=5, key="uw_term",
+            "Term", TERMS, index=None, key="uw_term", placeholder="Choose a term",
             format_func=lambda m: f"{m} months  ({m // 12} years)",
         )
-        product = st.selectbox("Product", lb.PRODUCTS, key="uw_product")
+        product = st.selectbox("Product", lb.PRODUCTS, index=None, key="uw_product",
+                               placeholder="Choose a product")
         today = today_local().date()
         app_date = st.date_input(
             "Application received", value=today, max_value=today, key="uw_app_date", format="DD/MM/YYYY",
             help="The day the bank received the application (Phnom Penh time). Recorded with the "
                  "decision for time-to-decision and period reporting. It does not change the score.")
         existing_debt = st.number_input(
-            "Existing monthly debt payments", min_value=0, max_value=1_000_000, value=0, step=50,
-            key="uw_exdebt", help="Instalments the applicant already pays on other loans/cards. "
-                                   "Without this, debt-to-income is a floor, not the real figure.")
+            "Existing monthly debt payments (optional)", min_value=0, max_value=1_000_000, step=50,
+            key="uw_exdebt", value=None, placeholder="Blank = 0",
+            help="Instalments the applicant already pays on other loans/cards. "
+                 "Without this, debt-to-income is a floor, not the real figure.")
         collateral = st.number_input(
-            "Collateral value", min_value=0, max_value=50_000_000, value=0, step=5_000,
-            key="uw_collateral", help="Appraised value of the security offered (0 = unsecured).")
+            "Collateral value (optional)", min_value=0, max_value=50_000_000, step=5_000,
+            key="uw_collateral", value=None, placeholder="Blank = 0 (unsecured)",
+            help="Appraised value of the security offered (blank or 0 = unsecured).")
         st.caption("Model instalment estimate assumes 8.5% p.a.; the price suggestion below uses the policy rate.")
 
     with c:
         st.markdown("**Profile**")
         credit_history = st.selectbox(
-            "Credit history", [1, 0], key="uw_credit",
+            "Credit history", [1, 0], index=None, key="uw_credit", placeholder="Choose one",
             format_func=lambda v: "On file" if v == 1 else "None or adverse",
         )
         employment_status = st.selectbox(
-            "Employment", ["salaried", "self_employed", "unemployed"], key="uw_emp",
-            format_func=lambda v: v.replace("_", "-").title(),
+            "Employment", ["salaried", "self_employed", "unemployed"], index=None, key="uw_emp",
+            placeholder="Choose one", format_func=lambda v: v.replace("_", "-").title(),
         )
         property_area = st.selectbox(
-            "Property area", ["urban", "semiurban", "rural"], key="uw_area",
-            format_func=lambda v: v.title(),
+            "Property area", ["urban", "semiurban", "rural"], index=None, key="uw_area",
+            placeholder="Choose one", format_func=lambda v: v.title(),
         )
         credit_score = st.number_input(
-            "Credit score", min_value=300, max_value=850, value=700, step=5,
-            key="uw_score", help="Credit score available in the new dataset."
+            "Credit score", min_value=300, max_value=850, step=5,
+            key="uw_score", help="Credit bureau score, 300 to 850.", **num,
         )
         late_payments_12m = st.number_input(
-            "Late payments — last 12 months", min_value=0, max_value=24, value=0, step=1,
-            key="uw_late", help="Number of late-payment events in the previous 12 months."
+            "Late payments - last 12 months", min_value=0, max_value=24, step=1,
+            key="uw_late", help="Number of late-payment events in the previous 12 months. Enter 0 if none.",
+            **num,
         )
 
-    extras = dict(existing_monthly_debt=float(existing_debt), collateral_value=float(collateral), product=product,
-                  application_date=app_date.isoformat())
+    extras = dict(existing_monthly_debt=float(existing_debt or 0), collateral_value=float(collateral or 0),
+                  product=product, application_date=app_date.isoformat())
+    if missing_fields():
+        return None, extras
     return dict(
         applicant_income=float(applicant_income),
-        coapplicant_income=float(coapplicant_income),
+        coapplicant_income=float(coapplicant_income or 0),
         loan_amount=float(loan_amount),
         loan_term_months=int(loan_term_months),
         credit_history=int(credit_history),
