@@ -142,6 +142,16 @@ if not login_required():
 else:
     # Idle timeout, disabled-account check and sign-in gate.
     if not auth.check_session():
+        st.markdown("""
+            <style>
+            [data-testid="stSidebar"],
+            [data-testid="stSidebarCollapsedControl"],
+            [data-testid="collapsedControl"],
+            #cd-sidebar-toggle {
+                display: none !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
         auth.render_login()
         st.stop()
 
