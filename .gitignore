@@ -1,0 +1,57 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual environments
+venv/
+.venv
+env/
+ENV/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Runtime data — generated at first use, never versioned
+data/audit_log.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Generated / derived data (kept out of version control; regenerate via src/data_pipeline.py)
+data/loan_data_clean.csv
+
+# Generated reports (regenerate via generate_report.py) — comment out if you want to version them
+# reports/Bank_Loan_Portfolio_Analytics_Report.html
+# reports/figures/*.png
+
+# Logs
+*.log
+
+# Runtime state - never versioned (credentials, audit trail, decisions, models, uploaded extracts)
+data/users.json
+data/users.lock
+data/first_run_admin.txt
+data/audit_log.db*
+data/audit_fallback.jsonl
+data/models/
+data/uploads/
+data/documents/
+data/backups/
+data/sample_data_loaded.txt
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# Private package folder made by launch.py on first start
+.venv

@@ -1,0 +1,42 @@
+CREDIT DESK - HOW TO OPEN
+=========================
+
+1. Extract the ZIP (right-click > Extract All). Do not run it from inside the ZIP.
+
+2. Double-click the START file:
+      Windows : START Credit Desk (Windows).bat
+      Mac     : START Credit Desk (Mac).command
+                (first time only: right-click > Open > Open)
+
+   The FIRST start installs everything by itself (needs internet, about 2-5 minutes).
+   After that it opens in a few seconds.
+
+3. The browser opens Credit Desk by itself. Sign in:
+      admin   / admin123     (Administrator - every page)
+      risk    / risk123      (Risk Manager)
+      officer / officer123   (Credit Officer)
+
+   Keep the black window open while you use the app. Close it to stop the app.
+
+If something goes wrong: see "Problems on first start?" in README.md.
+
+
+ខ្មែរ - របៀបបើក Credit Desk
+==========================
+
+1. Extract ZIP ជាមុនសិន (ចុចកណ្ដុរស្ដាំ > Extract All)។ កុំបើកពីក្នុង ZIP ផ្ទាល់។
+
+2. ចុចពីរដងលើ file START:
+      Windows : START Credit Desk (Windows).bat
+      Mac     : START Credit Desk (Mac).command
+                (លើកដំបូង: ចុចកណ្ដុរស្ដាំ > Open > Open)
+
+   លើកដំបូង វានឹងដំឡើងអ្វីៗទាំងអស់ដោយខ្លួនឯង (ត្រូវការអ៊ីនធឺណិត ប្រហែល 2-5 នាទី)។
+   លើកក្រោយៗ បើកបានក្នុងរយៈពេលប៉ុន្មានវិនាទីប៉ុណ្ណោះ។
+
+3. Browser នឹងបើក Credit Desk ដោយខ្លួនឯង។ ចូលប្រើដោយ:
+      admin   / admin123
+      risk    / risk123
+      officer / officer123
+
+   កុំបិទផ្ទាំងខ្មៅ ពេលកំពុងប្រើកម្មវិធី។ បិទវាវិញ ដើម្បីបញ្ឈប់កម្មវិធី។

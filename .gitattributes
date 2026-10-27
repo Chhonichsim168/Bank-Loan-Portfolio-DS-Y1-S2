@@ -1,0 +1,9 @@
+# Keep line endings right for each platform, whatever computer the project is pushed from.
+* text=auto
+*.bat text eol=crlf
+*.command text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary

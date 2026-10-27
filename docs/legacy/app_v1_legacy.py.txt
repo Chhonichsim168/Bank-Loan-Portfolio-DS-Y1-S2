@@ -1,0 +1,704 @@
+"""
+Bank Loan Portfolio Analytics — Streamlit Dashboard
+=====================================================
+A professional, interactive decision-support system for bank loan portfolio
+analysis: data quality, exploratory analysis, statistics, risk segmentation,
+a predictive approval model, and a live what-if simulator for loan officers.
+
+Run locally:
+    streamlit run app.py
+
+Author: Bank Loan Portfolio Analytics Team
+License: MIT (see LICENSE)
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from src.data_pipeline import run_pipeline, PipelineReport
+from src import analytics as an
+from src.risk_model import train_model, predict_single_applicant, NUMERIC_FEATURES
+
+# =========================================================================================
+# PAGE CONFIG & THEME
+# =========================================================================================
+st.set_page_config(
+    page_title="Bank Loan Portfolio Analytics",
+    page_icon="🏦",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+NAVY = "#0B2545"
+NAVY_LIGHT = "#13315C"
+GOLD = "#C89B3C"
+SLATE = "#3E5C76"
+INK = "#1B1F23"
+PAPER = "#F5F6F8"
+GREEN = "#1E8E5A"
+RED = "#B3261E"
+
+PLOTLY_TEMPLATE = go.layout.Template()
+PLOTLY_TEMPLATE.layout.colorway = [NAVY, GOLD, SLATE, GREEN, RED, NAVY_LIGHT]
+PLOTLY_TEMPLATE.layout.font = dict(family="Source Sans Pro, Arial, sans-serif", color=INK, size=13)
+PLOTLY_TEMPLATE.layout.plot_bgcolor = "white"
+PLOTLY_TEMPLATE.layout.paper_bgcolor = "white"
+
+st.markdown(f"""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@600;700&family=Source+Sans+Pro:wght@400;600;700&display=swap');
+
+    html, body, [class*="css"]  {{
+        font-family: 'Source Sans Pro', sans-serif;
+    }}
+    .block-container {{ padding-top: 1.6rem; max-width: 1300px; }}
+
+    h1, h2, h3 {{
+        font-family: 'Source Serif 4', serif;
+        color: {NAVY};
+        letter-spacing: -0.01em;
+    }}
+    h1 {{ border-bottom: 3px solid {GOLD}; padding-bottom: 0.4rem; }}
+
+    [data-testid="stSidebar"] {{
+        background-color: {NAVY};
+    }}
+    [data-testid="stSidebar"] * {{ color: #E7EAF0 !important; }}
+    [data-testid="stSidebar"] .stRadio label {{ font-size: 0.95rem; }}
+
+    div[data-testid="stMetric"] {{
+        background: white;
+        border: 1px solid #E1E4E9;
+        border-left: 4px solid {GOLD};
+        border-radius: 6px;
+        padding: 0.9rem 1rem;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }}
+    div[data-testid="stMetricLabel"] {{ color: {SLATE}; font-weight: 600; }}
+
+    .insight-box {{
+        background: #EEF2F7;
+        border-left: 4px solid {NAVY};
+        padding: 0.85rem 1.1rem;
+        border-radius: 4px;
+        margin: 0.6rem 0 1.3rem 0;
+        font-size: 0.94rem;
+        color: {INK};
+    }}
+    .insight-box b {{ color: {NAVY}; }}
+
+    .brand-header {{
+        display:flex; align-items:center; gap: 0.6rem; margin-bottom: -0.4rem;
+    }}
+    .badge {{
+        display:inline-block; background:{GOLD}; color:{NAVY}; font-weight:700;
+        border-radius: 3px; padding: 0.1rem 0.5rem; font-size: 0.72rem;
+        letter-spacing: 0.03em;
+    }}
+    footer {{visibility: hidden;}}
+</style>
+""", unsafe_allow_html=True)
+
+
+def insight(text: str):
+    st.markdown(f'<div class="insight-box">{text}</div>', unsafe_allow_html=True)
+
+
+# =========================================================================================
+# DATA LOADING (cached)
+# =========================================================================================
+@st.cache_data(show_spinner="Loading and cleaning loan portfolio…")
+def load_clean_data():
+    df, report = run_pipeline("data/loan_data.csv", drop_invalid=True)
+    return df, report
+
+
+@st.cache_resource(show_spinner="Training approval prediction model…")
+def get_model(df: pd.DataFrame):
+    return train_model(df)
+
+
+df, pipeline_report = load_clean_data()
+model_result = get_model(df)
+
+# =========================================================================================
+# SIDEBAR NAVIGATION
+# =========================================================================================
+st.sidebar.markdown("## 🏦 Loan Portfolio\n### Analytics System")
+st.sidebar.caption("Decision-support dashboard for retail lending teams")
+page = st.sidebar.radio(
+    "Navigate",
+    [
+        "📌 Executive Overview",
+        "🧪 Data Quality & Pipeline",
+        "🔎 Exploratory Analysis",
+        "📊 Statistical Analysis",
+        "🧭 Analytical Questions",
+        "🎯 Risk Segmentation",
+        "🤖 Predictive Model",
+        "🧮 Applicant Simulator",
+        "💡 Findings & Recommendations",
+        "📚 Data Dictionary & About",
+    ],
+)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Filter Portfolio")
+areas = st.sidebar.multiselect("Property Area", sorted(df["property_area"].unique()), default=None)
+emp = st.sidebar.multiselect("Employment Status", sorted(df["employment_status"].unique()), default=None)
+risk = st.sidebar.multiselect("Risk Level", ["Low", "Medium", "High"], default=None)
+
+fdf = an.filter_portfolio(
+    df,
+    employment_status=emp or None,
+    property_area=areas or None,
+    risk_level=risk or None,
+)
+st.sidebar.caption(f"Showing **{len(fdf):,}** of {len(df):,} applications")
+
+# =========================================================================================
+# PAGE: EXECUTIVE OVERVIEW
+# =========================================================================================
+if page == "📌 Executive Overview":
+    st.markdown('<div class="brand-header"><span class="badge">LIVE PORTFOLIO</span></div>', unsafe_allow_html=True)
+    st.title("Bank Loan Portfolio Analytics")
+    st.caption("An end-to-end analytics system for monitoring loan applications, credit risk, "
+               "and approval performance across the retail lending portfolio.")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Applications", f"{len(fdf):,}")
+    c2.metric("Overall Approval Rate", f"{fdf['approved'].mean()*100:.1f}%")
+    c3.metric("Avg. Loan Amount", f"${fdf['loan_amount'].mean():,.0f}")
+    c4.metric("Avg. Household Income", f"${fdf['total_income'].mean():,.0f}")
+    c5.metric("High-Risk Share", f"{(fdf['risk_level']=='High').mean()*100:.1f}%")
+
+    st.markdown("### Portfolio at a Glance")
+    col1, col2 = st.columns([1.3, 1])
+    with col1:
+        trend = fdf.groupby(pd.qcut(fdf["total_income"], 10, labels=False, duplicates="drop") + 1)["approved"].mean() * 100
+        fig = px.line(x=trend.index, y=trend.values, markers=True,
+                       labels={"x": "Income Decile (1=Lowest,10=Highest)", "y": "Approval Rate (%)"},
+                       title="Approval Rate Across Income Deciles", template=PLOTLY_TEMPLATE)
+        st.plotly_chart(fig, width="stretch")
+    with col2:
+        rc = fdf["risk_level"].value_counts().reindex(["Low", "Medium", "High"]).dropna()
+        fig2 = px.pie(values=rc.values, names=rc.index, hole=0.45,
+                       color=rc.index, color_discrete_map={"Low": GREEN, "Medium": GOLD, "High": RED},
+                       title="Portfolio Risk Composition", template=PLOTLY_TEMPLATE)
+        st.plotly_chart(fig2, width="stretch")
+
+    insight(
+        "<b>Reading the overview:</b> Approval rate climbs steadily with income decile, and the "
+        f"portfolio's high-risk segment currently represents <b>{(fdf['risk_level']=='High').mean()*100:.1f}%</b> "
+        "of applications. Use the sidebar filters to drill into a specific area, employment type, "
+        "or risk band, or explore the tabs on the left for deep-dive analysis."
+    )
+
+    st.markdown("### Business Problem & Project Scope")
+    st.markdown("""
+Retail lending teams review thousands of loan applications, but approval decisions are often made
+ad-hoc, income and debt-ratio patterns are not systematically monitored, and there is no single
+place to see how approval outcomes vary across income levels, employment types, property areas,
+and credit history. This creates inconsistent underwriting, unmonitored concentration risk, and
+missed opportunities to flag high-risk segments early.
+
+**This system analyzes a portfolio of 2,000 historical loan applications** to surface approval
+drivers, quantify risk concentration, and provide a transparent, data-driven decision-support tool
+for loan officers and risk teams.
+
+**In scope:** applicant/co-applicant income, loan amount & term, credit history, employment status,
+property area, dependents, and the resulting approval outcome — analyzed via cleaning, validation,
+descriptive/inferential statistics, visual analytics, and a predictive approval model.
+
+**Out of scope / limitations:** this dataset does not include external bureau credit scores,
+collateral valuation, existing liabilities beyond the stated loan, macroeconomic conditions, or
+fraud signals. The predictive model is illustrative and **must not** be used as a sole basis for
+real underwriting decisions — see the Disclaimer on the "Predictive Model" page.
+""")
+
+# =========================================================================================
+# PAGE: DATA QUALITY & PIPELINE
+# =========================================================================================
+elif page == "🧪 Data Quality & Pipeline":
+    st.title("Data Quality & Cleaning Pipeline")
+    st.caption("Full transparency on how raw data was inspected, cleaned, validated, and enriched.")
+
+    raw = pd.read_csv("data/loan_data.csv")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Raw Rows", f"{pipeline_report.rows_in:,}")
+    c2.metric("Clean Rows", f"{pipeline_report.rows_out:,}")
+    c3.metric("Duplicates Removed", f"{pipeline_report.duplicates_dropped:,}")
+    c4.metric("Invalid Rows Removed", f"{pipeline_report.invalid_rows_dropped:,}")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["Structure", "Missing Values", "Validation Rules", "Derived Columns"])
+
+    with tab1:
+        st.markdown("**`df.head()`**")
+        st.dataframe(raw.head(), width="stretch")
+        st.markdown(f"**`df.shape`** → `{raw.shape}`")
+        st.markdown(f"**`df.columns`** → `{list(raw.columns)}`")
+        st.markdown("**`df.describe()`**")
+        st.dataframe(raw.describe(include="all").T, width="stretch")
+        buf = []
+        raw.info(buf=type("B", (), {"write": buf.append, "flush": lambda s: None})())
+        st.markdown("**`df.info()`**")
+        st.code("".join(buf))
+
+    with tab2:
+        st.markdown("**Missing value counts (before cleaning)**")
+        miss_before = pd.Series(pipeline_report.missing_before, name="missing_count")
+        st.dataframe(miss_before.to_frame(), width="stretch")
+        insight(
+            "<b>Handling strategy:</b> Numeric financial fields are imputed with the <b>median</b> "
+            "(robust to the right-skew typical of income/loan data); categorical fields with the "
+            "<b>mode</b>; rows missing the target label are dropped. This dataset had "
+            f"{'no missing values' if not any(pipeline_report.missing_before.values()) else 'some missing values'} "
+            "in its raw form, so the pipeline is demonstrated defensively — it will correctly handle "
+            "missing data if a future data extract contains any."
+        )
+
+    with tab3:
+        st.markdown("**Validation rules applied**")
+        rules_df = pd.DataFrame([
+            {"Rule": "applicant_income between 0 and 200,000", "Violations": pipeline_report.invalid_rows_flagged.get("applicant_income_out_of_range", 0)},
+            {"Rule": "coapplicant_income >= 0", "Violations": pipeline_report.invalid_rows_flagged.get("coapplicant_income_negative", 0)},
+            {"Rule": "loan_amount between 0 and 5,000,000", "Violations": pipeline_report.invalid_rows_flagged.get("loan_amount_out_of_range", 0)},
+            {"Rule": "loan_term_months between 12 and 480", "Violations": pipeline_report.invalid_rows_flagged.get("loan_term_out_of_range", 0)},
+            {"Rule": "dependents between 0 and 10", "Violations": pipeline_report.invalid_rows_flagged.get("dependents_out_of_range", 0)},
+            {"Rule": "credit_history in {0, 1}", "Violations": pipeline_report.invalid_rows_flagged.get("credit_history_invalid", 0)},
+            {"Rule": "employment_status in valid set", "Violations": pipeline_report.invalid_rows_flagged.get("employment_status_invalid", 0)},
+            {"Rule": "property_area in valid set", "Violations": pipeline_report.invalid_rows_flagged.get("property_area_invalid", 0)},
+            {"Rule": "approved in {0, 1}", "Violations": pipeline_report.invalid_rows_flagged.get("approved_invalid", 0)},
+        ])
+        st.dataframe(rules_df, width="stretch", hide_index=True)
+        insight("All 2,000 records passed every validation rule in this dataset — the pipeline reports "
+                "zero violations, confirming the source data is well-formed and consistent.")
+
+    with tab4:
+        st.markdown("**Derived / calculated columns added by the pipeline**")
+        derived_docs = pd.DataFrame([
+            {"Column": "total_income", "Formula": "applicant_income + coapplicant_income", "Purpose": "True household affordability base"},
+            {"Column": "loan_to_income_ratio", "Formula": "loan_amount / total_income", "Purpose": "Loan size relative to means"},
+            {"Column": "estimated_emi", "Formula": "Amortized monthly payment @ 8.5% p.a.", "Purpose": "Illustrative monthly obligation"},
+            {"Column": "debt_to_income_ratio", "Formula": "estimated_emi / total_income", "Purpose": "Core affordability / risk metric"},
+            {"Column": "income_bracket", "Formula": "Tertile of total_income", "Purpose": "Segment applicants by income"},
+            {"Column": "loan_size_category", "Formula": "Binned loan_amount", "Purpose": "Segment applicants by loan size"},
+            {"Column": "household_size", "Formula": "dependents + 1 (+1 if co-applicant)", "Purpose": "Household composition estimate"},
+            {"Column": "risk_level", "Formula": "Rule-based score (credit history, DTI, employment, LTI)", "Purpose": "Composite qualitative risk tag"},
+        ])
+        st.dataframe(derived_docs, width="stretch", hide_index=True)
+        st.dataframe(df[["total_income", "loan_to_income_ratio", "estimated_emi",
+                          "debt_to_income_ratio", "income_bracket", "loan_size_category",
+                          "household_size", "risk_level"]].head(10), width="stretch")
+
+# =========================================================================================
+# PAGE: EXPLORATORY ANALYSIS
+# =========================================================================================
+elif page == "🔎 Exploratory Analysis":
+    st.title("Exploratory Data Analysis")
+    st.caption("Filtering, sorting, grouping and aggregation — applied to the current sidebar filter selection.")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["Distributions", "Group Comparisons", "Pivot Table", "Top Applicants"])
+
+    with tab1:
+        c1, c2 = st.columns(2)
+        with c1:
+            fig = px.histogram(fdf, x="total_income", nbins=40, template=PLOTLY_TEMPLATE,
+                                title="Distribution of Total Household Income")
+            fig.add_vline(x=fdf["total_income"].median(), line_dash="dash", line_color=RED,
+                          annotation_text="Median")
+            st.plotly_chart(fig, width="stretch")
+        with c2:
+            fig = px.histogram(fdf, x="loan_amount", nbins=40, template=PLOTLY_TEMPLATE,
+                                title="Distribution of Loan Amounts", color_discrete_sequence=[GOLD])
+            st.plotly_chart(fig, width="stretch")
+        insight("Both income and loan amount are right-skewed — most applicants request modest, "
+                "affordable loans, while a smaller number of high-income applicants seek much larger amounts. "
+                "This confirms the pipeline's choice of median-based imputation over mean.")
+
+    with tab2:
+        c1, c2 = st.columns(2)
+        with c1:
+            g = an.approval_rate_by(fdf, "employment_status")
+            fig = px.bar(g, x=g.index, y="approval_rate_pct", template=PLOTLY_TEMPLATE, text_auto=".1f",
+                         title="Approval Rate by Employment Status",
+                         labels={"approval_rate_pct": "Approval Rate (%)", "x": "Employment Status"})
+            st.plotly_chart(fig, width="stretch")
+        with c2:
+            g2 = an.approval_rate_by(fdf, "property_area")
+            fig2 = px.bar(g2, x=g2.index, y="approval_rate_pct", template=PLOTLY_TEMPLATE, text_auto=".1f",
+                          title="Approval Rate by Property Area",
+                          labels={"approval_rate_pct": "Approval Rate (%)", "x": "Property Area"})
+            st.plotly_chart(fig2, width="stretch")
+        insight("Salaried applicants and urban/semiurban properties tend to show higher approval rates "
+                "than self-employed applicants and rural properties — a pattern worth validating against "
+                "bureau data before drawing policy conclusions.")
+
+    with tab3:
+        st.markdown("**Pivot Table — Approval Rate (%) by Property Area × Employment Status**")
+        pt = an.pivot_area_vs_employment(fdf)
+        st.dataframe(pt.style.format("{:.1f}").background_gradient(cmap="Blues"), width="stretch")
+        insight("Reading the pivot: rows are property areas, columns are employment types, and each cell "
+                "is the approval rate (%) for that combination — useful for spotting specific "
+                "underperforming segments (e.g. self-employed + rural).")
+
+    with tab4:
+        n = st.slider("Show top N applicants by loan amount", 5, 50, 10)
+        st.dataframe(an.top_n_by(fdf, "loan_amount", n=n)[
+            ["applicant_income", "coapplicant_income", "loan_amount", "total_income",
+             "debt_to_income_ratio", "risk_level", "approved"]
+        ], width="stretch")
+
+# =========================================================================================
+# PAGE: STATISTICAL ANALYSIS
+# =========================================================================================
+elif page == "📊 Statistical Analysis":
+    st.title("Statistical Analysis")
+    st.caption("Descriptive statistics and correlation analysis across key numeric fields.")
+
+    stats_cols = ["applicant_income", "coapplicant_income", "loan_amount", "total_income",
+                  "loan_to_income_ratio", "estimated_emi", "debt_to_income_ratio"]
+    stats_df = an.numeric_summary_stats(fdf, stats_cols)
+    st.markdown("**Summary Statistics**")
+    st.dataframe(stats_df, width="stretch")
+    insight(
+        f"Median total income (${fdf['total_income'].median():,.0f}) sits below the mean "
+        f"(${fdf['total_income'].mean():,.0f}), confirming a right-skewed distribution driven by a "
+        "minority of high-income applicants — the standard deviation is large relative to the median, "
+        "reinforcing that a small number of outliers pull the average upward."
+    )
+
+    st.markdown("**Correlation Matrix**")
+    corr_cols = ["applicant_income", "coapplicant_income", "loan_amount", "loan_term_months",
+                 "credit_history", "total_income", "loan_to_income_ratio", "estimated_emi",
+                 "debt_to_income_ratio", "approved"]
+    corr = an.correlation_matrix(fdf, corr_cols)
+    fig = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
+                     template=PLOTLY_TEMPLATE, title="Correlation Matrix — Key Variables")
+    fig.update_layout(height=550)
+    st.plotly_chart(fig, width="stretch")
+
+    top_corr = corr["approved"].drop("approved").abs().sort_values(ascending=False)
+    insight(
+        f"<b>Strongest correlate of approval:</b> <code>{top_corr.index[0]}</code> "
+        f"(|r| = {top_corr.iloc[0]:.2f}). Debt-to-income ratio and credit history dominate the "
+        "relationship with approval outcome, while raw income alone is a weaker standalone predictor — "
+        "affordability (debt relative to income) matters more than income size in isolation."
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        fig = px.box(fdf, x="approved", y="debt_to_income_ratio", color="approved",
+                     template=PLOTLY_TEMPLATE, title="Debt-to-Income Ratio by Approval Outcome",
+                     labels={"approved": "Approved (1) / Rejected (0)"},
+                     color_discrete_sequence=[RED, GREEN])
+        st.plotly_chart(fig, width="stretch")
+    with c2:
+        fig = px.scatter(fdf, x="total_income", y="loan_amount", color=fdf["approved"].map({1: "Approved", 0: "Rejected"}),
+                          template=PLOTLY_TEMPLATE, title="Loan Amount vs. Total Income",
+                          color_discrete_map={"Approved": GREEN, "Rejected": RED}, opacity=0.55)
+        st.plotly_chart(fig, width="stretch")
+
+# =========================================================================================
+# PAGE: ANALYTICAL QUESTIONS
+# =========================================================================================
+elif page == "🧭 Analytical Questions":
+    st.title("Core Analytical Questions")
+    st.caption("The 5 analytical questions defined for this project, each answered with evidence.")
+
+    with st.expander("Q1 — How strongly does credit history influence loan approval?", expanded=True):
+        r = an.answer_q1_credit_history_effect(fdf)
+        st.dataframe(r, width="stretch")
+        good = r.loc[1, "approval_rate_pct"] if 1 in r.index else np.nan
+        bad = r.loc[0, "approval_rate_pct"] if 0 in r.index else np.nan
+        insight(f"Applicants with a good credit history are approved at <b>{good:.1f}%</b> vs. "
+                f"<b>{bad:.1f}%</b> for those without — the single largest gap in the dataset. "
+                "Credit history is the strongest policy lever available to underwriters.")
+
+    with st.expander("Q2 — Does higher income correlate with higher approval likelihood?"):
+        r = an.answer_q2_income_vs_approval(fdf)
+        st.dataframe(r, width="stretch")
+        insight("Approval rate rises with income bracket, but the increase is modest compared to the "
+                "credit-history effect — income alone is a weaker driver than affordability ratios.")
+
+    with st.expander("Q3 — Do approval patterns differ across property area and employment type?"):
+        r = an.answer_q3_area_employment_patterns(fdf)
+        st.dataframe(r.style.format("{:.1f}"), width="stretch")
+        insight("Approval rates vary meaningfully across the area × employment grid, with self-employed "
+                "rural applicants consistently the weakest-performing segment.")
+
+    with st.expander("Q4 — What share of the portfolio falls into each risk segment, and how do they perform?"):
+        r = an.answer_q4_risk_segment_sizes(fdf)
+        st.dataframe(r, width="stretch")
+        insight("Low-risk applicants make up the majority of the book and approve at a high rate, while "
+                "the small high-risk segment shows both low approval rates and elevated average DTI — "
+                "exactly the pattern a healthy risk-based pricing policy would expect.")
+
+    with st.expander("Q5 — At what debt-to-income ratio does approval likelihood drop sharply?"):
+        r = an.answer_q5_dti_threshold_effect(fdf)
+        st.dataframe(r, width="stretch")
+        fig = px.bar(r, x=r.index, y="approval_rate_pct", template=PLOTLY_TEMPLATE, text_auto=".1f",
+                     title="Approval Rate by Debt-to-Income Band",
+                     labels={"approval_rate_pct": "Approval Rate (%)", "x": "DTI Band"})
+        st.plotly_chart(fig, width="stretch")
+        insight("Approval rate falls off sharply once debt-to-income crosses ~30% and collapses beyond "
+                "50% — a natural, data-driven threshold for underwriting policy or automated pre-screening.")
+
+# =========================================================================================
+# PAGE: RISK SEGMENTATION
+# =========================================================================================
+elif page == "🎯 Risk Segmentation":
+    st.title("Risk Segmentation")
+    st.caption("Composite rule-based risk scoring across the portfolio (see Data Dictionary for the rule).")
+
+    c1, c2, c3 = st.columns(3)
+    for col, level, color in zip([c1, c2, c3], ["Low", "Medium", "High"], [GREEN, GOLD, RED]):
+        share = (fdf["risk_level"] == level).mean() * 100
+        appr = fdf.loc[fdf["risk_level"] == level, "approved"].mean() * 100 if (fdf["risk_level"] == level).any() else 0
+        col.metric(f"{level} Risk — Share", f"{share:.1f}%", f"{appr:.1f}% approved")
+
+    fig = px.histogram(fdf, x="debt_to_income_ratio", color="risk_level", nbins=40, template=PLOTLY_TEMPLATE,
+                        color_discrete_map={"Low": GREEN, "Medium": GOLD, "High": RED},
+                        title="Debt-to-Income Distribution by Risk Level", barmode="overlay", opacity=0.65)
+    st.plotly_chart(fig, width="stretch")
+
+    st.markdown("**Cross-tab: Risk Level vs. Approval Outcome**")
+    st.dataframe(an.risk_distribution(fdf), width="stretch")
+
+    insight("Risk levels are derived from a transparent rule (credit history, DTI band, employment "
+            "status, loan-to-income ratio) rather than a black box — every score can be explained to "
+            "an applicant or auditor in plain business terms.")
+
+# =========================================================================================
+# PAGE: PREDICTIVE MODEL
+# =========================================================================================
+elif page == "🤖 Predictive Model":
+    st.title("Predictive Approval Model")
+    st.caption("A logistic regression model trained on the historical portfolio to estimate approval probability.")
+
+    st.warning(
+        "⚠️ **Disclaimer:** This model is an illustrative decision-support tool built for this "
+        "analytics project. It is trained on a limited feature set and historical data that may "
+        "reflect past biases. It must **not** be used as the sole basis for real credit decisions — "
+        "always combine with bureau data, human underwriting judgment, and fair-lending compliance review."
+    )
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Accuracy", f"{model_result.accuracy*100:.1f}%")
+    c2.metric("Precision", f"{model_result.precision*100:.1f}%")
+    c3.metric("Recall", f"{model_result.recall*100:.1f}%")
+    c4.metric("F1 Score", f"{model_result.f1*100:.1f}%")
+    c5.metric("ROC AUC", f"{model_result.roc_auc:.3f}")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        cm = model_result.confusion
+        fig = px.imshow(cm, text_auto=True, x=["Predicted Reject", "Predicted Approve"],
+                         y=["Actual Reject", "Actual Approve"], color_continuous_scale="Blues",
+                         template=PLOTLY_TEMPLATE, title="Confusion Matrix (Test Set)")
+        st.plotly_chart(fig, width="stretch")
+    with col2:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=model_result.fpr, y=model_result.tpr, mode="lines",
+                                  line=dict(color=NAVY, width=3), name="ROC Curve"))
+        fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines",
+                                  line=dict(color="gray", dash="dash"), name="Random Baseline"))
+        fig.update_layout(title=f"ROC Curve (AUC = {model_result.roc_auc:.3f})",
+                           xaxis_title="False Positive Rate", yaxis_title="True Positive Rate",
+                           template=PLOTLY_TEMPLATE)
+        st.plotly_chart(fig, width="stretch")
+
+    st.markdown("**Feature Importance (Logistic Regression Coefficients)**")
+    fi = model_result.feature_importance.head(12)
+    fig = px.bar(fi, x="coefficient", y="feature", orientation="h", template=PLOTLY_TEMPLATE,
+                 color="coefficient", color_continuous_scale="RdBu", title="What Drives the Model's Decisions",
+                 labels={"coefficient": "Effect on Approval Log-Odds", "feature": ""})
+    fig.update_layout(height=450)
+    st.plotly_chart(fig, width="stretch")
+    insight("Positive bars push approval probability up; negative bars push it down. "
+            "Debt-to-income ratio and credit history dominate the model — consistent with the "
+            "correlation analysis on the Statistical Analysis page.")
+
+# =========================================================================================
+# PAGE: APPLICANT SIMULATOR (What-If)
+# =========================================================================================
+elif page == "🧮 Applicant Simulator":
+    st.title("Applicant What-If Simulator")
+    st.caption("Enter a hypothetical applicant profile to see the model's estimated approval probability "
+               "and derived risk metrics — useful for loan-officer training and policy testing.")
+
+    with st.form("simulator"):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            applicant_income = st.number_input("Applicant Monthly Income ($)", 0, 200000, 5000, step=100)
+            coapplicant_income = st.number_input("Co-applicant Monthly Income ($)", 0, 200000, 0, step=100)
+            dependents = st.slider("Dependents", 0, 10, 0)
+        with c2:
+            loan_amount = st.number_input("Loan Amount ($)", 0, 5000000, 120000, step=1000)
+            loan_term_months = st.selectbox("Loan Term (months)", [60, 120, 180, 240, 300, 360, 420, 480], index=5)
+            credit_history = st.selectbox("Credit History", [1, 0], format_func=lambda x: "Good (1)" if x == 1 else "Poor (0)")
+        with c3:
+            employment_status = st.selectbox("Employment Status", ["salaried", "self_employed", "unemployed"])
+            property_area = st.selectbox("Property Area", ["urban", "semiurban", "rural"])
+        submitted = st.form_submit_button("Estimate Approval Probability", width="stretch")
+
+    if submitted:
+        applicant = dict(
+            applicant_income=applicant_income, coapplicant_income=coapplicant_income,
+            loan_amount=loan_amount, loan_term_months=loan_term_months,
+            credit_history=credit_history, dependents=dependents,
+            employment_status=employment_status, property_area=property_area,
+        )
+        pred, proba = predict_single_applicant(model_result.pipeline, applicant)
+
+        total_income = applicant_income + coapplicant_income
+        from src.data_pipeline import _emi, ASSUMED_ANNUAL_INTEREST_RATE
+        emi = _emi(loan_amount, ASSUMED_ANNUAL_INTEREST_RATE, loan_term_months)
+        dti = emi / total_income if total_income else 0
+        lti = loan_amount / total_income if total_income else 0
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Model Prediction", "✅ Likely Approved" if pred == 1 else "❌ Likely Rejected")
+        c2.metric("Approval Probability", f"{proba*100:.1f}%")
+        c3.metric("Estimated Monthly EMI", f"${emi:,.0f}")
+        c4.metric("Debt-to-Income Ratio", f"{dti*100:.1f}%")
+
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number", value=proba * 100,
+            title={"text": "Approval Probability (%)"},
+            gauge={
+                "axis": {"range": [0, 100]},
+                "bar": {"color": NAVY},
+                "steps": [
+                    {"range": [0, 40], "color": "#F6D5D3"},
+                    {"range": [40, 70], "color": "#FBEBBD"},
+                    {"range": [70, 100], "color": "#D2ECD9"},
+                ],
+            },
+        ))
+        st.plotly_chart(fig, width="stretch")
+
+        if dti > 0.5:
+            insight("⚠️ Debt-to-income ratio exceeds 50% — this is the single biggest risk factor for "
+                    "this applicant and the most likely reason for a low approval probability.")
+        elif credit_history == 0:
+            insight("⚠️ Poor credit history is weighing heavily against this applicant — historically, "
+                    "applicants without a good credit history are approved far less often, regardless of income.")
+        else:
+            insight("✅ This applicant profile shows a manageable debt-to-income ratio and favorable "
+                    "credit history — both strongly associated with approval in the historical portfolio.")
+
+# =========================================================================================
+# PAGE: FINDINGS & RECOMMENDATIONS
+# =========================================================================================
+elif page == "💡 Findings & Recommendations":
+    st.title("Key Findings & Recommendations")
+
+    st.markdown("## 🔑 Key Findings")
+    findings = [
+        ("Credit history is the single strongest driver of approval.",
+         f"Applicants with a good credit history are approved {an.answer_q1_credit_history_effect(df).loc[1,'approval_rate_pct']:.1f}% "
+         f"of the time vs. only {an.answer_q1_credit_history_effect(df).loc[0,'approval_rate_pct']:.1f}% for those without one — a gap "
+         "of over 40 percentage points."),
+        ("Debt-to-income ratio, not raw income, is the key affordability signal.",
+         "Correlation analysis shows debt-to-income ratio has a stronger relationship with approval than "
+         "applicant income alone, and approval rates fall off sharply once DTI exceeds ~30%."),
+        ("The portfolio is concentrated in low-to-medium risk.",
+         f"{(df['risk_level']=='Low').mean()*100:.1f}% of applications are classified Low risk and "
+         f"{(df['risk_level']=='High').mean()*100:.1f}% High risk, indicating a generally healthy book "
+         "with a small segment requiring closer underwriting attention."),
+        ("Employment type and property area create measurable approval gaps.",
+         "Self-employed applicants and rural properties consistently show lower approval rates than "
+         "salaried applicants and urban/semiurban properties, even after controlling for income."),
+        ("A simple 8-feature model achieves strong predictive performance.",
+         f"The logistic regression baseline achieves {model_result.roc_auc:.2f} ROC AUC using only "
+         "application-form data — demonstrating that a lightweight, explainable model can meaningfully "
+         "support (not replace) underwriting triage."),
+    ]
+    for i, (title, body) in enumerate(findings, 1):
+        st.markdown(f"**{i}. {title}**")
+        st.markdown(f"<div class='insight-box'>{body}</div>", unsafe_allow_html=True)
+
+    st.markdown("## ✅ Recommendations")
+    recs = [
+        "Weight credit history more heavily in automated pre-screening, but pair it with a manual "
+        "review path for applicants with poor history but strong income and low DTI, to avoid over-rejecting bankable customers.",
+        "Adopt a debt-to-income cap (e.g., 40-45%) as an explicit underwriting guideline, since approval "
+        "likelihood collapses beyond that threshold in the historical data.",
+        "Investigate the self-employed and rural-property approval gap for potential process friction "
+        "(e.g., harder-to-verify income) versus genuine risk difference, to ensure fair and consistent underwriting.",
+        "Introduce a risk-based pricing or collateral-requirement tier for the High-risk segment rather "
+        "than blanket rejection, to retain servicable customers while pricing for risk.",
+        "Deploy the predictive model as a triage aid (flagging applications for priority manual review) "
+        "rather than an autonomous approver, and monitor it quarterly for drift and fair-lending compliance.",
+        "Expand the dataset with bureau credit scores, existing liabilities, and collateral value to "
+        "improve model accuracy and reduce reliance on proxy variables like employment status.",
+    ]
+    for r in recs:
+        st.markdown(f"- {r}")
+
+# =========================================================================================
+# PAGE: DATA DICTIONARY & ABOUT
+# =========================================================================================
+elif page == "📚 Data Dictionary & About":
+    st.title("Data Dictionary & Project Information")
+
+    st.markdown("### Objectives")
+    st.markdown("""
+1. **Quantify** the key drivers of loan approval (credit history, income, debt ratios, employment, property area) with statistical evidence.
+2. **Segment** the loan portfolio into actionable risk tiers and measure each tier's size and performance.
+3. **Build and evaluate** a transparent predictive model that estimates approval probability from application-form data, achieving ROC AUC ≥ 0.80.
+""")
+
+    st.markdown("### Analytical Questions")
+    st.markdown("""
+1. How strongly does credit history influence loan approval?
+2. Does higher applicant income correlate with higher approval likelihood?
+3. Do approval patterns differ across property area and employment type?
+4. What share of the portfolio falls into each risk segment, and how do they perform?
+5. At what debt-to-income ratio does approval likelihood drop off sharply?
+""")
+
+    st.markdown("### Data Dictionary")
+    dd = pd.DataFrame([
+        {"Field": "applicant_income", "Type": "float", "Description": "Primary applicant's monthly income (USD)", "Example": "5324.99"},
+        {"Field": "coapplicant_income", "Type": "float", "Description": "Co-applicant's monthly income (USD), 0 if none", "Example": "1429.28"},
+        {"Field": "loan_amount", "Type": "float", "Description": "Requested loan principal (USD)", "Example": "134000.00"},
+        {"Field": "loan_term_months", "Type": "int", "Description": "Requested loan repayment term, in months", "Example": "360"},
+        {"Field": "credit_history", "Type": "int (0/1)", "Description": "1 = good credit history on file, 0 = poor/none", "Example": "1"},
+        {"Field": "dependents", "Type": "int", "Description": "Number of financial dependents", "Example": "2"},
+        {"Field": "employment_status", "Type": "categorical", "Description": "salaried / self_employed / unemployed", "Example": "salaried"},
+        {"Field": "property_area", "Type": "categorical", "Description": "urban / semiurban / rural", "Example": "urban"},
+        {"Field": "approved", "Type": "int (0/1)", "Description": "Target: 1 = loan approved, 0 = rejected", "Example": "1"},
+        {"Field": "total_income", "Type": "float (derived)", "Description": "applicant_income + coapplicant_income", "Example": "6754.27"},
+        {"Field": "loan_to_income_ratio", "Type": "float (derived)", "Description": "loan_amount / total_income", "Example": "19.85"},
+        {"Field": "estimated_emi", "Type": "float (derived)", "Description": "Amortized monthly installment @ 8.5% p.a.", "Example": "1030.42"},
+        {"Field": "debt_to_income_ratio", "Type": "float (derived)", "Description": "estimated_emi / total_income", "Example": "0.15"},
+        {"Field": "income_bracket", "Type": "categorical (derived)", "Description": "Low / Medium / High tertile of total_income", "Example": "Medium"},
+        {"Field": "loan_size_category", "Type": "categorical (derived)", "Description": "Small / Medium / Large / Jumbo bin of loan_amount", "Example": "Medium"},
+        {"Field": "household_size", "Type": "int (derived)", "Description": "dependents + applicant (+ co-applicant if income > 0)", "Example": "3"},
+        {"Field": "risk_level", "Type": "categorical (derived)", "Description": "Low / Medium / High composite rule-based risk score", "Example": "Low"},
+    ])
+    st.dataframe(dd, width="stretch", hide_index=True)
+
+    st.markdown("### About This System")
+    st.markdown("""
+Built with **Python, Pandas, NumPy, scikit-learn, Plotly, Matplotlib/Seaborn, and Streamlit**.
+Source code, dataset, and full documentation are available in the accompanying GitHub repository
+(`README.md`), including the data pipeline, analytics, visualization, and modeling modules used
+to power every page of this dashboard.
+""")
+    st.markdown(f"**Pipeline audit trail:**")
+    st.code(pipeline_report.summary())
+
+st.sidebar.markdown("---")
+st.sidebar.caption("Bank Loan Portfolio Analytics v1.0 · Built with Streamlit")

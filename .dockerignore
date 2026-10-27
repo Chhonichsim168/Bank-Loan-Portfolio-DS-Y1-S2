@@ -1,0 +1,12 @@
+.git
+__pycache__
+.pytest_cache
+data/users.json
+data/audit_log.db
+data/models
+data/uploads
+data/first_run_admin.txt
+.venv
+data/documents
+data/backups
+data/sample_data_loaded.txt

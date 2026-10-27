@@ -1,0 +1,19 @@
+# Ranges tested together; exact versions that passed the test suite are in requirements.lock.
+# For a reproducible production build:  pip install -r requirements.lock
+pandas>=2.1,<4
+numpy>=1.26,<3
+scikit-learn>=1.4,<2
+scipy>=1.11,<2
+joblib>=1.3,<2
+plotly>=5.18,<8
+streamlit>=1.40,<2
+openpyxl>=3.1,<4        # Excel export
+reportlab>=4,<6         # PDF export
+cryptography>=42        # encrypted backups
+
+# Used only by generate_report.py (the standalone HTML report) and src/visualizations.py
+matplotlib>=3.8,<4
+seaborn>=0.13,<1
+
+# Tests
+pytest>=7.4,<10
