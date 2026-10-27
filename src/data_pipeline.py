@@ -181,8 +181,12 @@ class PipelineReport:
 # --------------------------------------------------------------------------------------
 # 1. LOAD
 # --------------------------------------------------------------------------------------
-def load_data(path: str | Path) -> pd.DataFrame:
-    """Load the raw loan applications CSV into a DataFrame."""
+def load_data(path: str | Path | pd.DataFrame) -> pd.DataFrame:
+    """Load the raw loan applications (a CSV path, or the frame read from the database)."""
+    if isinstance(path, pd.DataFrame):
+        df = path.copy()
+        logger.info(f"Loaded {len(df):,} rows and {df.shape[1]} columns from the database")
+        return df
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Dataset not found at: {path}")
@@ -550,7 +554,7 @@ def engineer_features(df: pd.DataFrame, report: PipelineReport) -> pd.DataFrame:
 # --------------------------------------------------------------------------------------
 # ORCHESTRATOR
 # --------------------------------------------------------------------------------------
-def run_pipeline(path: str | Path, drop_invalid: bool = True) -> tuple[pd.DataFrame, PipelineReport]:
+def run_pipeline(path: str | Path | pd.DataFrame, drop_invalid: bool = True) -> tuple[pd.DataFrame, PipelineReport]:
     """Run the full load -> clean -> validate -> engineer pipeline end-to-end."""
     report = PipelineReport()
     df = load_data(path)

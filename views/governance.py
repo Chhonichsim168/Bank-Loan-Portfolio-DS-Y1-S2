@@ -15,7 +15,7 @@ from src.data_pipeline import (
     RISK_HIGH_MIN, RISK_LATE_ANY_AT, RISK_LATE_SEVERE_AT, RISK_MAX_POINTS,
     RISK_MEDIUM_MIN, RISK_SCORE_BAD_BELOW, RISK_SCORE_WEAK_BELOW,
 )
-from src import fairness, monitoring, policy_store, registry, workflow
+from src import app_store, fairness, monitoring, policy_store, registry, workflow
 from src.security import esc, to_safe_csv
 from src.state import ctx, fingerprint_of, honest_probabilities, load_raw
 from src import auth, audit
@@ -321,8 +321,11 @@ def _source(c) -> None:
     with d:
         ui.kpi("Fields", f"{c.book.shape[1]}", foot=f"{N_SOURCE} source, the rest derived")
 
-    with st.expander("First rows, as received"):
-        ui.table(load_raw(policy_store.active_data_source().path).head(20))
+    st.caption("The extract is imported once into the SQLite database (table applications). Records can be "
+               "added or removed on Portfolio > Application data. Loading a new extract or reverting to the "
+               "bundled sample REPLACES the table, including records added by hand.")
+    with st.expander("First rows, as stored in the database"):
+        ui.table(load_raw(app_store.version()).head(20))
 
     st.download_button(
         "Download the cleaned book (CSV)",
@@ -387,6 +390,7 @@ def _activity_log() -> None:
         "policy_rejected": "Policy rejected", "decision_saved": "Decision saved",
         "decision_approved": "Second approval: approved", "decision_rejected": "Second approval: rejected",
         "decision_returned": "Second approval: returned", "bootstrap_admin": "First-run admin created",
+        "data_row_added": "Application record added", "data_rows_deleted": "Application record(s) removed",
     }
     display = pd.DataFrame({
         "When (Phnom Penh)": to_local(events["ts"]).values,

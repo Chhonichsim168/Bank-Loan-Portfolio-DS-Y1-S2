@@ -13,6 +13,7 @@ never has to know how either happens.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,7 +23,7 @@ import streamlit as st
 
 from src import analytics as an
 from src import decisioning as dec
-from src import policy_store, registry
+from src import app_store, policy_store, registry
 from src.data_pipeline import DATE_COL, PipelineReport, has_dates, run_pipeline
 from src.risk_model import ModelResult
 
@@ -93,16 +94,18 @@ def fmt_bounds(bounds: tuple | None) -> str:
 # CACHED LOADERS
 # =========================================================================================
 @st.cache_data(show_spinner=False)
-def load_book(path: str) -> tuple[pd.DataFrame, PipelineReport]:
-    return run_pipeline(path, drop_invalid=True)
+def load_book(version: str) -> tuple[pd.DataFrame, PipelineReport]:
+    """The applications in the SQLite database, cleaned. ``version`` changes whenever a record is
+    added or removed, so every chart and KPI follows the database automatically."""
+    return run_pipeline(app_store.load_frame(), drop_invalid=True)
 
 
 @st.cache_data(show_spinner=False)
-def load_raw(path: str) -> pd.DataFrame:
-    return pd.read_csv(path)
+def load_raw(version: str) -> pd.DataFrame:
+    return app_store.load_frame()
 
 
-@st.cache_resource(show_spinner="Loading the registered model...")
+@st.cache_resource(show_spinner="Updating the model for the current data (about 15 seconds the first time)...")
 def fit_model(_book: pd.DataFrame, fingerprint: str) -> ModelResult:
     """The registered model for exactly this data (trained and saved on first use, then loaded
     from data/models). `fingerprint` keys the cache; the frame is passed unhashed."""
@@ -130,7 +133,9 @@ def _usable_mask(book: pd.DataFrame) -> pd.Series:
 
 
 def fingerprint_of(df: pd.DataFrame) -> str:
-    return f"{len(df)}:{df.shape[1]}:{float(df['loan_amount'].sum()):.0f}"
+    """Content hash of the book: any added, removed or changed record gives a new key."""
+    h = pd.util.hash_pandas_object(df, index=False).values.tobytes()
+    return f"{len(df)}:{df.shape[1]}:{hashlib.sha256(h).hexdigest()[:16]}"
 
 
 # =========================================================================================
@@ -209,8 +214,7 @@ def current_cutoff() -> float:
 
 def ctx() -> Context:
     """The single accessor every page uses."""
-    source = policy_store.active_data_source()
-    book, report = load_book(source.path)
+    book, report = load_book(app_store.version())
     fp = fingerprint_of(book)
     model = fit_model(book, fp)
 
@@ -255,7 +259,7 @@ def ctx() -> Context:
         prev_view=prev_view,
         timeline=filtered,
         chips=chips,
-        source_name=source.name,
+        source_name=f"SQLite database ({app_store.source_name()})",
         policy=active.settings.policy(),
         settings=active.settings,
         policy_version=active.version,

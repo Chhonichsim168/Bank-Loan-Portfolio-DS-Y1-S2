@@ -44,7 +44,7 @@ from src import state, ui  # noqa: E402
 from src import auth  # noqa: E402
 from src.mode import login_required  # noqa: E402
 from src.security import esc  # noqa: E402
-from views import (account, batch, drivers, governance, loan_book, model,  # noqa: E402
+from views import (account, appdata, batch, drivers, governance, loan_book, model,  # noqa: E402
                    overview, policy, queue, segments, underwrite, users)
 from views import _result  # noqa: E402
 
@@ -132,8 +132,21 @@ def _inject_sidebar_toggle() -> None:
     )
 
 
+def _hide_menu_when_signed_out() -> None:
+    """Sign-in page (before sign-in and after Sign out): no sidebar, no Menu button - only the
+    sign-in card. The Menu button lives in the page itself, so it is removed here explicitly."""
+    st.markdown(
+        """<style>
+        section[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"],
+        [data-testid="collapsedControl"], [data-testid="stExpandSidebarButton"],
+        [data-testid="stSidebarCollapseButton"], #cd-sidebar-toggle { display: none !important; }
+        </style>""", unsafe_allow_html=True)
+    components.html(
+        "<script>(function(){const b=window.parent.document.getElementById('cd-sidebar-toggle');"
+        "if(b){b.remove();}})();</script>", height=0)
+
+
 ui.inject_theme()
-_inject_sidebar_toggle()
 state.init()
 
 if not login_required():
@@ -142,14 +155,18 @@ if not login_required():
 else:
     # Idle timeout, disabled-account check and sign-in gate.
     if not auth.check_session():
+        _hide_menu_when_signed_out()
         auth.render_login()
         st.stop()
 
     # A one-time password must be replaced (and MFA enrolled, if required) before anything else.
     _setup = auth.pending_setup(auth.current_user())
     if _setup:
+        _hide_menu_when_signed_out()
         auth.render_forced_setup(auth.current_user(), _setup)
         st.stop()
+
+_inject_sidebar_toggle()          # the Menu button exists only for a signed-in user
 
 
 # =========================================================================================
@@ -193,6 +210,7 @@ PAGES = {
         ("Segments", "segments", segments.render),
         ("Approval drivers", "drivers", drivers.render),
         ("Loan book", "loanbook", loan_book.render),
+        ("Application data", "appdata", appdata.render),
     ],
     "Decisioning": [
         ("Score an application", "score", underwrite.render),
