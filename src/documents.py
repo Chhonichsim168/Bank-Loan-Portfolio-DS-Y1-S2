@@ -11,8 +11,11 @@ again whenever it is downloaded, so a file swapped on disk is refused.
 
 from __future__ import annotations
 
+from src.storage import DATA_DIR
+
 import hashlib
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,7 +25,7 @@ from src import audit
 from src.security import safe_filename
 
 ROOT = Path(__file__).resolve().parent.parent
-DOC_DIR = Path(os.environ.get("CREDIT_DESK_DOC_DIR", ROOT / "data" / "documents"))
+DOC_DIR = Path(os.environ.get("CREDIT_DESK_DOC_DIR", DATA_DIR / "documents"))
 ALLOWED = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
 MAX_BYTES = 10 * 1024 * 1024
 _MAGIC = {".pdf": (b"%PDF",), ".png": (b"\x89PNG",), ".jpg": (b"\xff\xd8\xff",), ".jpeg": (b"\xff\xd8\xff",)}
@@ -89,7 +92,7 @@ def _conn():
     return conn
 
 
-def attach(case_id: str, content: bytes, original_name: str, kind: str, username: str, role: str) -> int:
+def attach(case_id: str, content: bytes, original_name: str, kind: str, username: str, role: str, *, guard=None, on_attached=None) -> int:
     ext = Path(original_name or "").suffix.lower()
     if ext not in ALLOWED:
         raise ValueError("Only PDF, PNG and JPG files can be attached.")
@@ -110,11 +113,15 @@ def attach(case_id: str, content: bytes, original_name: str, kind: str, username
     conn = _conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        if guard is not None:
+            guard(conn)
         cur = conn.execute(
             "INSERT INTO case_documents (ts, case_id, username, label, kind, filename, sha256, size, stored) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
             (datetime.now(timezone.utc).isoformat(timespec="seconds"), case_id, username, label, kind,
              label, digest, len(content), path.name))
+        if on_attached is not None:
+            on_attached(conn,int(cur.lastrowid))
         audit.append(conn, username, role, "document_attached", f"{case_id} - {kind} - {label} - sha256 {digest[:16]}")
         conn.execute("COMMIT")
         return int(cur.lastrowid)
@@ -123,6 +130,8 @@ def attach(case_id: str, content: bytes, original_name: str, kind: str, username
             conn.execute("ROLLBACK")
         except Exception:
             pass
+        if isinstance(exc, (ValueError, PermissionError)):
+            raise
         raise audit.AuditError(f"Document was NOT attached: {exc}") from exc
     finally:
         conn.close()
@@ -148,6 +157,8 @@ def read(doc_id: int) -> tuple[bytes, str, str]:
     if not row:
         raise ValueError("Unknown document.")
     label, digest, stored = row
+    if not re.fullmatch(r"[a-f0-9]{64}\.(pdf|png|jpg|jpeg)", stored) or not stored.startswith(digest + "."):
+        raise ValueError("The stored document reference is invalid.")
     path = DOC_DIR / stored
     if not path.exists():
         raise FileNotFoundError("The stored file is missing.")

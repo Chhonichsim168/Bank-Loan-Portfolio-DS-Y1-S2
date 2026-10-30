@@ -21,6 +21,8 @@ audit log.
 
 from __future__ import annotations
 
+from src.storage import DATA_DIR
+
 import hashlib
 import json
 import os
@@ -32,7 +34,7 @@ from src import audit
 from src import decisioning as dec
 
 ROOT = Path(__file__).resolve().parent.parent
-UPLOAD_DIR = ROOT / "data" / "uploads"
+UPLOAD_DIR = DATA_DIR / "uploads"
 DEFAULT_DATA = ROOT / "data" / "loan_data.csv"
 
 _SCHEMA = """

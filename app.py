@@ -14,6 +14,7 @@ in `views/`, all shared state in `src/state.py`, all design tokens in `src/ui.py
 from __future__ import annotations
 
 import inspect
+import base64
 import sys
 from pathlib import Path
 
@@ -47,12 +48,13 @@ from src.security import esc  # noqa: E402
 from views import (account, batch, drivers, governance, loan_book, model,  # noqa: E402
                    overview, policy, queue, segments, underwrite, users)
 from views import _result  # noqa: E402
+from views import backup_admin, customer, customer_requests, support  # noqa: E402
 
 st.set_page_config(
     page_title="Credit Desk — Loan Portfolio Analytics",
     page_icon="◧",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
     menu_items={"about": "Credit Desk — loan portfolio analytics and decisioning."},
 )
 
@@ -73,11 +75,19 @@ def _inject_sidebar_toggle() -> None:
         <script>
         (function () {
             const doc = window.parent.document;
-            if (doc.getElementById('cd-sidebar-toggle')) return;
+            // Streamlit replaces the component iframe on page changes. Rebind the
+            // button instead of retaining handlers/timers owned by the old iframe.
+            const previous = doc.getElementById('cd-sidebar-toggle');
+            if (previous) previous.remove();
+            if (window.parent.__creditDeskMenuTimer) {
+                window.parent.clearInterval(window.parent.__creditDeskMenuTimer);
+            }
 
             const btn = doc.createElement('button');
             btn.id = 'cd-sidebar-toggle';
             btn.type = 'button';
+            btn.setAttribute('aria-label', 'Open navigation menu');
+            btn.title = 'Open navigation menu';
             btn.innerHTML = '&#9776;&nbsp; Menu';
             btn.style.cssText = [
                 'position:fixed', 'top:14px', 'left:14px', 'z-index:2147483647',
@@ -97,12 +107,16 @@ def _inject_sidebar_toggle() -> None:
                     '[data-testid="collapsedControl"] button',
                     '[data-testid="collapsedControl"]',
                     '[data-testid="stSidebarHeader"] button',
+                    'button[data-testid="stSidebarCollapseButton"]',
                     'button[aria-label*="sidebar" i]',
                     'button[title*="sidebar" i]',
                 ];
                 for (const sel of selectors) {
                     const el = doc.querySelector(sel);
-                    if (el) return el;
+                    if (el) {
+                        const target = el.matches('button') ? el : el.querySelector('button');
+                        if (target && target.getBoundingClientRect().width > 0) return target;
+                    }
                 }
                 return null;
             }
@@ -119,11 +133,12 @@ def _inject_sidebar_toggle() -> None:
             // don't want to sit on top of it.
             function sync() {
                 const sb = doc.querySelector('[data-testid="stSidebar"]');
-                const collapsed = !sb || sb.offsetWidth < 5
+                const rect = sb && sb.getBoundingClientRect();
+                const collapsed = !rect || rect.width < 5 || rect.right <= 5
                     || sb.getAttribute('aria-expanded') === 'false';
                 btn.style.display = collapsed ? 'flex' : 'none';
             }
-            setInterval(sync, 300);
+            window.parent.__creditDeskMenuTimer = window.parent.setInterval(sync, 300);
             sync();
         })();
         </script>
@@ -165,20 +180,28 @@ else:
 # =========================================================================================
 # NAVIGATION RAIL
 # =========================================================================================
-def user_panel() -> None:
+def user_panel(account_page=None) -> None:
     """Who is signed in, Sign out, and the source / version footer - bottom of the rail.
     (The portfolio filters are a bar at the top of the pages that use them: views/_filters.py.)"""
     c = state.ctx()
     user = auth.current_user()
     if login_required():
+        from src import customer_portal
+        import base64
+        identity = customer_portal.profile()
+        name = identity.get("full_name") or user.display_name
         st.sidebar.markdown(
             f'<div class="cd-user" style="border-top:1px solid rgba(255,255,255,0.12);'
             f'margin-top:0.9rem;padding-top:0.9rem">'
-            f'<span class="cd-user-name">{esc(user.display_name)}</span>'
+            f'<span class="cd-user-name">{esc(name)}</span>'
             f'<span class="cd-user-role">{esc(user.role_label)}</span></div>',
             unsafe_allow_html=True,
         )
-        st.sidebar.button("Sign out", key="_signout", on_click=_sign_out)
+        with st.sidebar.container(key="staff_account_actions"):
+            signout, settings = st.columns(2,gap="small")
+            signout.button("Sign out",key="_signout",on_click=_sign_out,**ui.STRETCH)
+            if account_page is not None and settings.button("My account",key="_staff_account",**ui.STRETCH):
+                st.switch_page(account_page)
         st.sidebar.toggle(
             f"Auto sign-out after {auth.session_timeout_minutes()} min idle",
             value=auth.auto_logout_enabled(user.username), key="_auto_logout",
@@ -197,6 +220,43 @@ def user_panel() -> None:
     )
 
 
+def staff_profile_header(profile_page):
+    from src import customer_portal
+    import base64
+    user = auth.current_user()
+    identity = customer_portal.profile()
+    name = identity.get("full_name") or user.display_name
+    initials = "".join(word[0] for word in name.split()[:2]).upper() or "U"
+    photo = customer_portal.profile_photo()
+    st.markdown("""<style>
+      [data-testid="stSidebarHeader"]::after {content:none;}
+      [data-testid="stSidebarHeader"] {height:48px!important;min-height:48px!important;
+        padding:4px 12px!important;margin:0 0 8px!important;border:0;display:flex;justify-content:flex-end;}
+      [data-testid="stSidebarHeader"] button {position:static!important;margin:0!important;min-width:40px;min-height:40px;}
+      .st-key-staff_identity_header {border-bottom:1px solid rgba(255,255,255,.15);padding-bottom:.8rem;margin-bottom:.5rem;}
+      .st-key-staff_identity_header [data-testid="stHorizontalBlock"],
+      .st-key-staff_account_actions [data-testid="stHorizontalBlock"] {flex-wrap:nowrap!important;align-items:center;}
+      .st-key-staff_identity_header [data-testid="stColumn"],
+      .st-key-staff_account_actions [data-testid="stColumn"] {min-width:0;}
+      .st-key-staff_profile_avatar button {width:44px!important;min-width:44px!important;height:44px!important;
+        min-height:44px!important;border-radius:50%!important;padding:0!important;background:#D3F4EC!important;
+        color:#07453F!important;border:2px solid #87DACA!important;font-weight:700;box-shadow:0 0 0 3px rgba(255,255,255,.08);}
+      .st-key-staff_profile_avatar button * {color:#07453F!important;}
+      .st-key-staff_profile_avatar button:focus-visible {outline:3px solid white;outline-offset:3px;}
+    </style>""",unsafe_allow_html=True)
+    if photo:
+        encoded=base64.b64encode(photo).decode("ascii")
+        st.markdown('<style>.st-key-staff_profile_avatar button {'
+            f'background-image:url("data:image/jpeg;base64,{encoded}")!important;'
+            'background-size:cover!important;background-position:center!important;}'
+            '.st-key-staff_profile_avatar button p {color:transparent!important;}</style>',unsafe_allow_html=True)
+    with st.sidebar.container(key="staff_identity_header"):
+        brand,avatar=st.columns([3,1],vertical_alignment="center",gap="small")
+        brand.markdown('<span style="color:white;font-size:1.05rem;font-weight:600;white-space:nowrap">Credit Desk</span>',unsafe_allow_html=True)
+        if avatar.button(initials,key="staff_profile_avatar",help="My profile"):
+            st.switch_page(profile_page)
+
+
 PAGES = {
     "Portfolio": [
         ("Overview", "overview", overview.render),
@@ -205,6 +265,8 @@ PAGES = {
         ("Loan book", "loanbook", loan_book.render),
     ],
     "Decisioning": [
+        ("Customer requests", "requests", customer_requests.render),
+        ("Customer support", "support_staff", support.render_staff),
         ("Score an application", "score", underwrite.render),
         ("Score a file", "batch", batch.render),
         ("Policy and cut-offs", "policy", policy.render),
@@ -216,8 +278,10 @@ PAGES = {
     ],
     "Administration": [
         ("User management", "users", users.render),
+        ("Backup and restore", "backups", backup_admin.render),
     ],
     "Account": [
+        ("My profile", "staff_profile", support.render_staff_profile),
         ("My account", "account", account.render),
     ],
 }
@@ -250,6 +314,8 @@ def render_nav(visible: dict, page_objs: dict, late_customers: int = 0) -> None:
     network connection to render) that toggles whether its pages are shown.
     """
     for group, items in visible.items():
+        if group == "Account":
+            continue
         open_key = f"_navopen_{group}"
         is_open = st.session_state.get(open_key, True)
         with st.sidebar.container(key=f"navgrp_{group}"):
@@ -355,6 +421,114 @@ def _late_banner(status, loan_page=None, on_loan_page: bool = False) -> None:
 
 
 def run() -> None:
+    user = auth.current_user()
+    if user.role == "customer":
+        from src.customer_i18n import language_picker, t
+        language_picker()
+        # Customer navigation never loads employee data, sample seeding, portfolio
+        # alerts or pending underwriting results, including on a direct page URL.
+        if hasattr(st, "navigation"):
+            from views import loan_details, request_details, customer_help
+            help_page = st.Page(customer_help.render,title=t("Help / FAQ"),url_path="help")
+            st.session_state["_customer_help_page"] = help_page
+            request_page = st.Page(request_details.render, title=t("Request details"), url_path="request_details")
+            st.session_state["_customer_request_details_page"] = request_page
+            details_page = st.Page(loan_details.render, title=t("Loan details"), url_path="loan_details")
+            st.session_state["_customer_loan_details_page"] = details_page
+            home_page = st.Page(customer.render, title=t("My customer portal"), url_path="customer", default=True)
+            st.session_state["_customer_home_page"] = home_page
+            profile_page = st.Page(customer.render_profile, title=t("My profile"), url_path="profile")
+            st.session_state["_customer_profile_page"] = profile_page
+            account_page = st.Page(account.render, title=t("My account"), url_path="account")
+            notifications_page = st.Page(customer.render_notifications, title=t("Notifications"), url_path="notifications")
+            support_page = st.Page(support.render_customer, title=t("Messages"), url_path="support")
+            st.session_state["_customer_support_page"] = support_page
+            hidden_nav = _nav_supports_hidden_position()
+            page = st.navigation([home_page, profile_page, account_page, notifications_page, support_page, details_page, request_page, help_page],
+                                 **({"position": "hidden"} if hidden_nav else {}))
+            from src import customer_portal
+            notices = customer_portal.my_notifications()
+            st.session_state["_customer_notifications_snapshot"] = {"username":user.username,"items":notices}
+            if getattr(page, "url_path", "") == "notifications":
+                customer_portal.mark_notifications_read([n["id"] for n in notices])
+                notices = [{**n, "unread": False} for n in notices]
+            customer.notification_bell(notices, notifications_page)
+            st.markdown("""<style>
+                [data-testid="stSidebarHeader"]::after { content: none; }
+                [data-testid="stSidebarHeader"] {
+                    height: 48px !important; min-height: 48px !important;
+                    padding: 4px 12px !important; margin: 0 0 8px !important;
+                    border: 0; overflow: visible; display: flex; justify-content: flex-end;
+                }
+                [data-testid="stSidebarHeader"] button {
+                    position: static !important; margin: 0 !important;
+                    min-width: 40px; min-height: 40px;
+                }
+                .st-key-customer_identity_header { padding-left: 0;
+                    border-bottom: 1px solid rgba(255,255,255,.15); padding-bottom: .8rem; }
+                .st-key-customer_identity_header [data-testid="stHorizontalBlock"] {
+                    flex-wrap: nowrap; align-items: center;
+                }
+                .st-key-customer_identity_header [data-testid="stColumn"] { min-width: 0; }
+                .st-key-customer_profile_avatar button {
+                    width: 44px !important; min-width: 44px !important; height: 44px !important;
+                    min-height: 44px !important; border-radius: 50% !important;
+                    padding: 0 !important; background: #D3F4EC !important;
+                    color: #07453F !important; border: 2px solid #87DACA !important;
+                    font-weight: 700; box-shadow: 0 0 0 3px rgba(255,255,255,.08);
+                }
+                .st-key-customer_profile_avatar button:hover {
+                    background: #FFFFFF !important; border-color: #FFFFFF !important;
+                }
+                .st-key-customer_profile_avatar button * { color: #07453F !important; }
+                .st-key-customer_profile_avatar button:focus-visible {
+                    outline: 3px solid #FFFFFF; outline-offset: 3px;
+                }
+                .st-key-customer_account_actions [data-testid="stHorizontalBlock"] { flex-wrap: nowrap; }
+                .st-key-customer_account_actions [data-testid="stColumn"] { min-width: 0; }
+            </style>""", unsafe_allow_html=True)
+            profile_name = customer_portal.profile().get("full_name") or user.display_name
+            initials = "".join(word[0] for word in profile_name.split()[:2]).upper() or "U"
+            avatar_image = customer_portal.profile_photo()
+            if avatar_image:
+                encoded = base64.b64encode(avatar_image).decode("ascii")
+                st.markdown('<style>.st-key-customer_profile_avatar button,'
+                    '.st-key-customer_profile_avatar button:hover {'
+                    f'background-image:url("data:image/jpeg;base64,{encoded}") !important;'
+                    'background-size:cover !important;background-position:center !important;}'
+                    '.st-key-customer_profile_avatar button p {color:transparent !important;}</style>',
+                    unsafe_allow_html=True)
+            with st.sidebar.container(key="customer_identity_header"):
+                brand, avatar = st.columns([3, 1], vertical_alignment="center", gap="small")
+                brand.markdown('<span style="color:white;font-size:1.05rem;font-weight:600;'
+                               'white-space:nowrap">Credit Desk</span>', unsafe_allow_html=True)
+                if avatar.button(initials, key="customer_profile_avatar", help=t("My profile")):
+                    st.switch_page(profile_page)
+            if hidden_nav:
+                st.sidebar.page_link(home_page, label=t("My customer portal"))
+                st.sidebar.page_link(details_page, label=t("Loan details"))
+                st.sidebar.page_link(request_page, label=t("Request details"))
+                st.sidebar.page_link(help_page, label=t("Help / FAQ"))
+                from src import customer_support
+                unread_support = int(customer_support.tickets()["unread"].sum())
+                support_label = t("Messages") + (f" :red-badge[{unread_support}]" if unread_support else "")
+                st.sidebar.page_link(support_page, label=support_label)
+            st.sidebar.markdown(f"**{esc(user.display_name)}**")
+            with st.sidebar.container(key="customer_account_actions"):
+                signout_col, account_col = st.columns(2, gap="small")
+                signout_col.button(t("Sign out"), key="_customer_signout", on_click=_sign_out, **ui.STRETCH)
+                if account_col.button(t("My account"), key="_customer_account", **ui.STRETCH):
+                    st.switch_page(account_page)
+            page.run()
+        else:
+            from views import loan_details, request_details, customer_help
+            customer_pages = {"Help / FAQ": customer_help.render, "My customer portal": customer.render, "Loan details": loan_details.render, "Request details": request_details.render,
+                              "My profile": customer.render_profile, "My account": account.render,
+                              "Notifications": customer.render_notifications, "Customer support": support.render_customer}
+            choice = st.sidebar.radio("Customer menu", list(customer_pages))
+            st.sidebar.button("Sign out", key="_customer_signout", on_click=_sign_out)
+            customer_pages[choice]()
+        return
     _missing_libraries_banner()
     _load_sample_data()
     user = auth.current_user()
@@ -376,8 +550,9 @@ def run() -> None:
         flat_pages = [p for group_pages in page_objs.values() for p in group_pages.values()]
         page = st.navigation(flat_pages, position="hidden")
         late = _late_status()
+        staff_profile_header(page_objs["Account"]["staff_profile"])
         render_nav(visible, page_objs, late_customers=late[0]["customers"] if late else 0)
-        user_panel()
+        user_panel(page_objs["Account"]["account"])
         loan_page = page_objs.get("Portfolio", {}).get("loanbook")
         _late_banner(late, loan_page, on_loan_page=getattr(page, "url_path", "") == "loanbook")
         _result.render_pending()

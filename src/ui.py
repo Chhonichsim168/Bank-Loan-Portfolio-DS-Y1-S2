@@ -244,6 +244,20 @@ span[data-testid="stIconMaterial"] {{
  * a chevron plus the word "Menu" (plain text, not an icon font, so it can't vanish
  * if a web-font fails to load) does that regardless of Streamlit version or theme.
  */
+/* Keep the native opener readable even while a page transition rebuilds the custom menu. */
+[data-testid="collapsedControl"] button,
+[data-testid="stSidebarCollapsedControl"] button {{
+    background: {BRAND_DEEP} !important;
+    color: #FFFFFF !important;
+    min-width: 44px;
+    min-height: 44px;
+}}
+[data-testid="collapsedControl"] button::after {{
+    content: "☰ Menu";
+    color: #FFFFFF;
+    font-size: 14px;
+    white-space: nowrap;
+}}
 [data-testid="stSidebarCollapsedControl"] {{
     background: {BRAND_DEEP} !important;
     border: 1px solid #6FD3C4 !important;
@@ -826,6 +840,25 @@ footer, #MainMenu {{ visibility: hidden; }}
     .cd-kpi-value {{ font-size: 1.42rem; }}
     .block-container {{ padding-top: 1.3rem; }}
     h1 {{ font-size: 1.5rem; }}
+}}
+@media (max-width: 640px) {{
+    [data-testid="stMainBlockContainer"], .block-container {{
+        padding: 5rem 1rem 2rem !important; max-width: 100% !important;
+    }}
+    [data-testid="stMain"] [data-testid="stHorizontalBlock"] {{
+        flex-direction: column !important; gap: .85rem !important;
+    }}
+    [data-testid="stMain"] [data-testid="stColumn"] {{
+        width: 100% !important; min-width: 0 !important; flex: 1 1 100% !important;
+    }}
+    [data-testid="stMain"] h1 {{ font-size: 1.6rem !important; line-height: 1.25; }}
+    [data-testid="stMain"] p, [data-testid="stMain"] pre {{ overflow-wrap: anywhere; white-space: pre-wrap; }}
+    [data-testid="stMain"] button {{ min-height: 44px; }}
+    [data-testid="stMain"] [role="tablist"] {{ max-width: 100%; overflow-x: auto; gap: 1rem; }}
+    [data-testid="stMain"] [role="tab"] {{ flex-shrink: 0; white-space: nowrap; }}
+    [data-testid="stMetricValue"] {{ font-size: 1.8rem; }}
+    [data-testid="stDataFrame"] {{ max-width: 100%; }}
+    [role="dialog"] {{ max-width: calc(100vw - 24px) !important; }}
 }}
 @media (prefers-reduced-motion: reduce) {{
     * {{ animation: none !important; transition: none !important; }}

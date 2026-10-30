@@ -97,6 +97,8 @@ CREATE TABLE IF NOT EXISTS loan_seen (
 def _conn():
     conn = audit.connect()
     conn.executescript(_SCHEMA)
+    if "interest_method" not in {row[1] for row in conn.execute("PRAGMA table_info(loans)")}:
+        conn.execute("ALTER TABLE loans ADD COLUMN interest_method TEXT NOT NULL DEFAULT 'reducing'")
     return conn
 
 
@@ -305,22 +307,46 @@ def events_for(loan_id: str) -> pd.DataFrame:
 # COMPUTATION (pure: loan dict + events frame + as-of date)
 # =========================================================================================
 def _annuity(principal: float, rate: float, term: int, first_due: date, start_no: int = 1) -> pd.DataFrame:
-    pay = econ.emi(principal, rate, term)
-    bal, rows = principal, []
+    from decimal import Decimal, ROUND_HALF_UP
+    cents = lambda value: Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    pay = cents(econ.emi(principal, rate, term))
+    bal, rows = cents(principal), []
+    monthly_rate = Decimal(str(rate)) / Decimal(12)
     for i in range(term):
-        interest = bal * rate / 12
-        princ = pay - interest if i < term - 1 else bal           # last instalment clears rounding
+        interest = cents(bal * monthly_rate)
+        princ = min(bal, max(Decimal(0), pay - interest)) if i < term - 1 else bal
         inst = princ + interest
-        bal = max(0.0, bal - princ)
+        bal = max(Decimal(0), bal - princ)
         rows.append({"no": start_no + i, "due_date": (pd.Timestamp(first_due) + pd.DateOffset(months=i)).date(),
-                     "installment": inst, "interest": interest, "principal": princ, "balance": bal})
+                     "installment": float(inst), "interest": float(interest),
+                     "principal": float(princ), "balance": float(bal)})
     return pd.DataFrame(rows)
 
 
 def schedule(loan: dict, events: pd.DataFrame | None = None) -> pd.DataFrame:
     """The repayment schedule in force: the original annuity, with each restructure replacing every
     instalment from its new first-due date onward by a fresh annuity on the scheduled balance."""
-    sched = _annuity(loan["principal"], loan["annual_rate"], int(loan["term_months"]), _d(loan["first_due_on"]))
+    if loan.get("interest_method") == "flat_total":
+        from decimal import Decimal, ROUND_HALF_UP
+        cents = lambda n: Decimal(str(n)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        principal = cents(loan["principal"])
+        interest_total = cents(principal * Decimal(str(loan["annual_rate"])))
+        term = int(loan["term_months"])
+        installment = cents((principal + interest_total) / term)
+        interest_part = cents(interest_total / term)
+        balance, interest_left, rows = principal, interest_total, []
+        for i in range(term):
+            interest = interest_part if i < term - 1 else interest_left
+            repaid = installment - interest if i < term - 1 else balance
+            balance -= repaid
+            interest_left -= interest
+            rows.append({"no": i + 1,
+                "due_date": (pd.Timestamp(loan["first_due_on"]) + pd.DateOffset(months=i)).date(),
+                "installment": float(repaid + interest), "principal": float(repaid),
+                "interest": float(interest), "balance": float(balance)})
+        sched = pd.DataFrame(rows)
+    else:
+        sched = _annuity(loan["principal"], loan["annual_rate"], int(loan["term_months"]), _d(loan["first_due_on"]))
     if events is not None and not events.empty:
         for _, e in events[events["kind"] == "restructure"].iterrows():
             p = json.loads(e["payload"])

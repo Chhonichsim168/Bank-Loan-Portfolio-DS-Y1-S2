@@ -27,6 +27,8 @@ behind a reverse proxy (see ``deploy/nginx.conf.example``) for that.
 
 from __future__ import annotations
 
+from src.storage import DATA_DIR
+
 import base64
 import contextlib
 import hashlib
@@ -49,13 +51,14 @@ import streamlit as st
 from src import audit
 
 ROOT = Path(__file__).resolve().parent.parent
-USERS_FILE = Path(os.environ.get("CREDIT_DESK_USERS_FILE", ROOT / "data" / "users.json"))
-FIRST_RUN_FILE = ROOT / "data" / "first_run_admin.txt"
+USERS_FILE = Path(os.environ.get("CREDIT_DESK_USERS_FILE", DATA_DIR / "users.json"))
+FIRST_RUN_FILE = DATA_DIR / "first_run_admin.txt"
 
 ROLE_LABELS: dict[str, str] = {
     "admin": "Administrator",
     "risk": "Risk Manager",
     "officer": "Credit Officer",
+    "customer": "Customer",
 }
 
 # Which roles may see which page slug. A slug with no entry is open to any signed-in user.
@@ -64,6 +67,7 @@ PAGE_ACCESS: dict[str, set[str]] = {
     "model": {"risk", "admin"},
     "data": {"risk", "admin"},
     "users": {"admin"},
+    "backups": {"admin"},
 }
 
 PBKDF2_ITERATIONS = 600_000
@@ -284,6 +288,45 @@ def create_user(username: str, display_name: str, role: str, password: str,
     audit.log_event(actor, _actor_role(actor), "user_created", f"{username} as {role}")
 
 
+def issue_recovery_code(username, password):
+    """Require the current password before generating a new single-use secret."""
+    code = secrets.token_urlsafe(24)
+    with _file_lock():
+        users = _read_users()
+        rec = users.get(username)
+        if not rec or rec.get("disabled"):
+            raise ValueError("Unable to create a recovery code.")
+        digest, _ = hash_password(password, rec["salt"], int(rec.get("iterations", LEGACY_ITERATIONS)))
+        if not hmac.compare_digest(digest, rec["hash"]):
+            raise ValueError("Current password is incorrect.")
+        rec["recovery_hash"] = hashlib.sha256(code.encode()).hexdigest()
+        _write_users(users)
+    audit.log_event(username, rec["role"], "recovery_code_created", "Previous code invalidated")
+    return code
+
+
+def recover_password(username, code, new_password):
+    errs = validate_password(new_password, username)
+    if errs:
+        raise ValueError(" ".join(errs))
+    with _file_lock():
+        users = _read_users()
+        rec = users.get(username)
+        candidate = hashlib.sha256(str(code).strip().encode()).hexdigest()
+        if (not rec or rec.get("disabled") or not rec.get("recovery_hash")
+                or not hmac.compare_digest(candidate, rec["recovery_hash"])):
+            raise ValueError("Username or recovery code is incorrect.")
+        rec["hash"], rec["salt"] = hash_password(new_password)
+        rec["iterations"] = PBKDF2_ITERATIONS
+        rec["password_changed_at"] = _iso(_now())
+        rec["must_change"] = False
+        rec["failed"], rec["locked_until"] = 0, ""
+        rec["session_version"] = int(rec.get("session_version",0)) + 1
+        rec.pop("recovery_hash", None)
+        _write_users(users)
+    audit.log_event(username, rec["role"], "password_recovered", "Single-use recovery code consumed; MFA preserved")
+
+
 def update_user(username: str, *, role: str | None = None, disabled: bool | None = None,
                 reset_mfa: bool = False, actor: str = "system") -> None:
     changes = []
@@ -471,6 +514,12 @@ def start_local_session() -> None:
 
 def can_access(role: str, slug: str) -> bool:
     from src.mode import login_required
+    if role == "customer":
+        return login_required() and slug in {"customer", "profile", "account", "notifications", "support", "loan_details", "request_details", "help"}
+    if slug in {"customer", "profile", "notifications", "support", "loan_details", "request_details", "help"}:
+        return False
+    if slug in {"requests", "support_staff", "staff_profile"}:
+        return role in {"admin", "risk", "officer"}
     if not login_required() and slug in NO_LOGIN_PAGES:
         return False
     allowed = PAGE_ACCESS.get(slug)
@@ -528,6 +577,9 @@ def check_session() -> bool:
     if not rec or rec.get("disabled"):
         log_out("Account disabled")
         return False
+    if int(st.session_state.get("_auth_session_version",0)) != int(rec.get("session_version",0)):
+        log_out("Password was reset. Please sign in again.")
+        return False
     from src.mode import auto_logout_default
     auto = bool(rec.get("auto_logout", auto_logout_default()))
     if auto and time.time() - last > session_timeout_minutes() * 60:
@@ -542,6 +594,7 @@ def log_in(user: User) -> None:
     audit.log_event(user.username, user.role, "login", "Signed in")      # strict: no audit, no session
     st.session_state.pop("_auth_pending", None)
     st.session_state["_auth_user"] = user
+    st.session_state["_auth_session_version"] = int((_read_users().get(user.username) or {}).get("session_version",0))
     touch()
 
 
@@ -616,6 +669,45 @@ def render_login() -> None:
                 st.rerun()
             else:
                 st.error(res.message)
+
+        with st.expander("New customer? Create an account"):
+            with st.form("customer_signup"):
+                name = st.text_input("Full name", max_chars=120)
+                new_username = st.text_input("Choose a username", max_chars=40)
+                new_password = st.text_input("Choose a password", type="password")
+                repeat = st.text_input("Confirm password", type="password")
+                register = st.form_submit_button("Create customer account")
+            if register:
+                if new_password != repeat:
+                    st.error("The passwords do not match.")
+                else:
+                    try:
+                        create_user(new_username, name, "customer", new_password,
+                                    must_change=False, actor="customer-registration")
+                        st.success("Account created. Save your recovery code below, then sign in and complete your profile.")
+                        recovery = issue_recovery_code(new_username.strip(), new_password)
+                        st.code(recovery)
+                        st.warning("Keep this private recovery code somewhere safe. It can reset your password and is shown only now.")
+                    except ValueError as exc:
+                        st.error(str(exc))
+
+        with st.expander("Forgot password?"):
+            st.caption("Use your saved recovery code. If you do not have one, ask an administrator for help.")
+            with st.form("password_recovery", clear_on_submit=True):
+                recovery_user = st.text_input("Username", key="recover_username")
+                recovery_code = st.text_input("Recovery code", type="password")
+                recovery_password = st.text_input("New password", type="password", key="recover_new")
+                recovery_repeat = st.text_input("Confirm new password", type="password", key="recover_confirm")
+                recover = st.form_submit_button("Reset password")
+            if recover:
+                if recovery_password != recovery_repeat:
+                    st.error("The passwords do not match.")
+                else:
+                    try:
+                        recover_password(recovery_user.strip(), recovery_code, recovery_password)
+                        st.success("Password reset. Sign in with your new password. Generate a new recovery code in My account.")
+                    except ValueError as exc:
+                        st.error(str(exc))
 
         if demo_mode():
             st.warning("TRIAL MODE - simple shared passwords are enabled. Sign in with: "

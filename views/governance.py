@@ -563,27 +563,45 @@ def _backup() -> None:
         ui.note("Only an Administrator can create or restore backups.", title="Administrators only")
         return
     ui.section("Encrypted backup",
-               "One encrypted file with the audit database, users, models, uploads and documents. It stays on "
-               "your computer; keep the passphrase safe - it cannot be recovered.")
+               "One encrypted file containing accounts, profiles, photos, requests, loans, payments, "
+               "support messages, documents and saved analysis. Download it and keep a copy outside the project folder. "
+               "Keep the passphrase safe - it cannot be recovered.")
     pw = st.text_input("Passphrase (12+ characters)", type="password", key="bak_pw")
+    confirmation = st.text_input("Confirm backup passphrase", type="password", key="bak_pw_confirm")
     if st.button("Create backup", key="bak_go"):
         try:
-            st.session_state["bak_blob"] = backup.create(pw, user.username, user.role)
+            if pw != confirmation:
+                raise ValueError("The backup passphrases do not match. Enter the same passphrase in both fields.")
+            blob = backup.create(pw, user.username, user.role)
+            backup.inspect(blob, pw)
+            st.session_state["bak_blob"] = blob
             st.success("Backup created. Download it below.")
-        except (ValueError, audit.AuditError) as exc:
+        except (ValueError, PermissionError, audit.AuditError) as exc:
             st.error(str(exc))
     if "bak_blob" in st.session_state:
         st.download_button("Download backup", st.session_state["bak_blob"], file_name="credit_desk_backup.cdbk",
                            mime="application/octet-stream")
     ui.section("Restore", "Replaces current data with the backup. The audit chain of the backup is verified first.")
-    f = st.file_uploader("Backup file", type=["cdbk"], key="bak_up")
+    import inspect
+    upload_options = {"max_upload_size": 250} if "max_upload_size" in inspect.signature(st.file_uploader).parameters else {}
+    f = st.file_uploader("Backup file", type=["cdbk"], key="bak_up", **upload_options)
     rp = st.text_input("Backup passphrase", type="password", key="bak_rpw")
     if f is not None and rp:
         try:
             info = backup.inspect(f.getvalue(), rp)
-            st.json(info)
+            from src.data_pipeline import to_local
+            st.write(f"Backup created: {to_local(info['created_utc'])}")
+            records = info.get("records", {})
+            st.caption(f"{records.get('profiles', 0)} customer profiles · {records.get('loans', 0)} loans · "
+                       f"{records.get('payments', 0)} payments · {records.get('documents', 0)} documents")
+            if not info["has_database"] or not info["has_users"]:
+                st.error("This backup is incomplete: both accounts and the database are needed to restore.")
+                return
             if st.checkbox("I understand this replaces current data", key="bak_ok") and st.button("Restore now", key="bak_restore"):
                 backup.restore(f.getvalue(), rp, user.username, user.role)
-                st.success("Restored. Please sign in again.")
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                auth.log_out("Backup restored. Please sign in again.")
+                st.rerun()
         except Exception as exc:
             st.error(str(exc))

@@ -13,6 +13,8 @@ tampered file is code execution.
 
 from __future__ import annotations
 
+from src.storage import DATA_DIR
+
 import hashlib
 import json
 import logging
@@ -29,7 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def model_dir() -> Path:
-    return Path(os.environ.get("CREDIT_DESK_MODEL_DIR", ROOT / "data" / "models"))
+    return Path(os.environ.get("CREDIT_DESK_MODEL_DIR", DATA_DIR / "models"))
 
 
 def _sha(path: Path) -> str:

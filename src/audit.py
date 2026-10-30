@@ -19,6 +19,8 @@ latest hash (``head_hash()``) to a system the database admin does not control, o
 
 from __future__ import annotations
 
+from src.storage import DATA_DIR
+
 import hashlib
 import json
 import logging
@@ -32,8 +34,8 @@ import pandas as pd
 logger = logging.getLogger("credit_desk.audit")
 
 ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = Path(os.environ.get("CREDIT_DESK_AUDIT_DB", ROOT / "data" / "audit_log.db"))
-FALLBACK_PATH = Path(os.environ.get("CREDIT_DESK_AUDIT_FALLBACK", ROOT / "data" / "audit_fallback.jsonl"))
+DB_PATH = Path(os.environ.get("CREDIT_DESK_AUDIT_DB", DATA_DIR / "audit_log.db"))
+FALLBACK_PATH = Path(os.environ.get("CREDIT_DESK_AUDIT_FALLBACK", DATA_DIR / "audit_fallback.jsonl"))
 GENESIS = "0" * 64
 
 
