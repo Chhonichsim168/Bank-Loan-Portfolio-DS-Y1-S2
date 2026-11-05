@@ -274,5 +274,5 @@ def render_staff():
 
 def render_staff_profile():
     portal.require_role(*portal.STAFF)
-    from views.customer import render_profile
+    from views.portal import render_profile
     render_profile()

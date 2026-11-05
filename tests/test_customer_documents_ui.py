@@ -36,13 +36,12 @@ customer_requests.render()
     customer_screen = screen(sandbox, 'customer_documents', '''
 import streamlit as st
 from src import auth
-from views import customer
+from views import portal
 st.session_state['_auth_user'] = auth.User('documents-customer','Customer','customer')
-customer.render()
+portal.render_apply()
 ''').run()
     assert not customer_screen.exception
     assert any('Please upload a clearer scan.' in m.value for m in customer_screen.info)
-    assert len(customer_screen.get('download_button')) == 1
     assert len(customer_screen.get('file_uploader')) == 1
 
 

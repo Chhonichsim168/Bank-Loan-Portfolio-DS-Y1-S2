@@ -63,7 +63,7 @@ def render():
       ("How do I record a payment?", "Follow the verified payment instructions or contact support first. After paying, report the date, amount and transfer reference. Staff must confirm receipt before your balance changes. The website does not transfer money."),
       ("Where can I download my records?", "Request receipts are in request history and Request details. Payment receipts are under My loans & payments. Loan details includes statement and repayment schedule downloads. PDF exports are in English."),
       ("Can I cancel or edit a submitted request?", "You can cancel a pending request before staff review it. To change its amount, term or purpose, cancel it and submit a new request. Contact support about a request already reviewed."),
-      ("How long are support chats kept?", "Chats expire 24 hours after the last message. A new message restarts that timer. Expired conversations are deleted when support data refreshes. Keep important confirmations outside the chat."),
+      ("How long are support chats kept?", "Conversations stay saved. They are not automatically deleted after 24 hours. Resolved chats remain in your history."),
       ("What if I forget my password?", "Use Forgot password on the sign-in screen with your saved recovery code. Codes are single-use. Generate a replacement in My account. If you have no code, ask an administrator for help."),
     ]
     for question,answer in items:

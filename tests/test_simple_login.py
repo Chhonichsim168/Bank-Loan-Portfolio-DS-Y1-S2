@@ -60,9 +60,9 @@ def test_simple_passwords_are_accepted(defaults):
 def test_login_page_is_shown_and_signing_in_works(defaults):
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=300).run()
     assert not at.exception
-    assert any(t.label == "Username" for t in at.text_input)
-    at.text_input(key=next(t.key for t in at.text_input if t.label == "Username")).set_value("admin")
-    at.text_input(key=next(t.key for t in at.text_input if t.label == "Password")).set_value("admin123")
+    assert any(t.label == "Username or email" for t in at.text_input)
+    at.text_input(key="_login_user").set_value("admin")
+    at.text_input(key="_login_pass").set_value("admin123")
     next(b for b in at.button if b.label == "Sign in").click().run()
     assert not at.exception, [e.value for e in at.exception]
     assert "Portfolio overview" in " ".join(m.value for m in at.markdown)

@@ -579,16 +579,16 @@ span[data-testid="stIconMaterial"] {{
     background-color: #F04438 !important; color: #FFFFFF !important; font-weight: 700;
     font-size: 0.7rem !important; border-radius: 999px; padding: 0.05rem 0.5rem; margin-left: 0.35rem;
 }}
-.st-key-cd_late_banner_cd-late-red {{
+[class*="st-key-cd_late_banner_cd-late-red"] {{
     background: #FEF3F2; border: 1px solid #FECDCA; border-left: 6px solid #B42318;
 }}
-.st-key-cd_late_banner_cd-late-amber {{
+[class*="st-key-cd_late_banner_cd-late-amber"] {{
     background: #FFFAEB; border: 1px solid #FEDF89; border-left: 6px solid #B54708;
 }}
 .cd-late-title {{ font-weight: 700; font-size: 1rem; color: #912018; line-height: 1.35; }}
-.st-key-cd_late_banner_cd-late-amber .cd-late-title {{ color: #93370D; }}
+[class*="st-key-cd_late_banner_cd-late-amber"] .cd-late-title {{ color: #93370D; }}
 .cd-late-body {{ color: #55160C; font-size: 0.88rem; margin-top: 0.15rem; }}
-.st-key-cd_late_banner_cd-late-amber .cd-late-body {{ color: #7A2E0E; }}
+[class*="st-key-cd_late_banner_cd-late-amber"] .cd-late-body {{ color: #7A2E0E; }}
 .cd-late-body b {{ color: #55160C; }}
 .cd-late-chips {{ margin-top: 0.4rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }}
 .cd-late-chip {{

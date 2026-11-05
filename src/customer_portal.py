@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS customer_notifications_read (
 CREATE TABLE IF NOT EXISTS customer_photos (
     username TEXT PRIMARY KEY, image BLOB NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS customer_request_second_approvals (
+    request_id TEXT PRIMARY KEY REFERENCES customer_requests(request_id),
+    approver TEXT NOT NULL, approver_role TEXT NOT NULL, note TEXT NOT NULL, approved_at TEXT NOT NULL
+);
 CREATE TRIGGER IF NOT EXISTS customer_links_no_update BEFORE UPDATE ON customer_loan_links
 BEGIN SELECT RAISE(ABORT, 'customer loan ownership is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS customer_links_no_delete BEFORE DELETE ON customer_loan_links
@@ -273,7 +277,9 @@ def requests():
     try:
         where, params = ("WHERE r.username=?", (user.username,)) if user.role == "customer" else ("", ())
         result = pd.read_sql_query(
-            "SELECT r.*, p.full_name,p.phone,p.email,p.location,l.loan_id,c.cancelled_at FROM customer_requests r "
+            "SELECT r.*, p.full_name,p.phone,p.email,p.location,l.loan_id,c.cancelled_at, "
+            "s.approver AS second_approver, s.approved_at AS second_approved_at FROM customer_requests r "
+            "LEFT JOIN customer_request_second_approvals s ON s.request_id=r.request_id "
             "LEFT JOIN customer_profiles p ON p.username=r.username "
             "LEFT JOIN customer_loan_links l ON l.request_id=r.request_id "
             "LEFT JOIN customer_request_cancellations c ON c.request_id=r.request_id "
@@ -328,6 +334,40 @@ def review(request_id, decision, explanation, amount=None, annual_rate=None, ter
                                (decision,audit._now(),user.username,explanation,amount,annual_rate,term,request_id))
         if changed.rowcount != 1:
             raise ValueError("This request has already been reviewed or cancelled. Refresh the page.")
+    from src import notify
+    notify.request_decision(request_id, "approved" if decision == "Approved" else "declined")
+
+
+SECOND_APPROVER_ROLES = {"risk", "admin"}
+
+
+def four_eyes_required() -> bool:
+    """Off only in single-operator mode (src/mode.py), exactly like the rest of the system."""
+    from src.mode import single_operator
+    return not single_operator()
+
+
+def second_approve(request_id, note):
+    """Four-eyes rule: an approved customer request needs a second, DIFFERENT employee - a Risk
+    Manager or Administrator - before the money can be issued."""
+    user = require_role(*SECOND_APPROVER_ROLES)
+    note = str(note or "").strip()
+    if not note or len(note) > 1000:
+        raise ValueError("Add a short note for the second approval (up to 1,000 characters).")
+    with transaction("customer_request_second_approval", f"{request_id}: {note[:80]}") as conn:
+        row = conn.execute("SELECT status,reviewed_by,username FROM customer_requests WHERE request_id=?",
+                           (request_id,)).fetchone()
+        if not row:
+            raise ValueError("Request not found.")
+        if row[0] != "Approved":
+            raise ValueError("Only an approved request can receive a second approval.")
+        if user.username in (row[1], row[2]) and four_eyes_required():
+            raise PermissionError("Four-eyes rule: the second approval must come from a different employee "
+                                  "than the first reviewer.")
+        if conn.execute("SELECT 1 FROM customer_request_second_approvals WHERE request_id=?", (request_id,)).fetchone():
+            raise ValueError("This request already has its second approval.")
+        conn.execute("INSERT INTO customer_request_second_approvals VALUES (?,?,?,?,?)",
+                     (request_id, user.username, user.role, note, audit._now()))
 
 
 def issue_loan(request_id, disbursed_on, first_due_on):
@@ -344,6 +384,10 @@ def issue_loan(request_id, disbursed_on, first_due_on):
         r = dict(zip([c[0] for c in cur.description], row))
         if r["status"] != "Approved":
             raise ValueError("Only an approved request can be issued.")
+        if four_eyes_required() and not conn.execute(
+                "SELECT 1 FROM customer_request_second_approvals WHERE request_id=?", (request_id,)).fetchone():
+            raise ValueError("Four-eyes rule: a Risk Manager or Administrator must give the second approval "
+                             "before the loan can be issued.")
         if conn.execute("SELECT 1 FROM customer_loan_links WHERE request_id=?", (request_id,)).fetchone():
             raise ValueError("This request already has an issued loan.")
         p = conn.execute("SELECT full_name,location FROM customer_profiles WHERE username=?",
@@ -355,6 +399,8 @@ def issue_loan(request_id, disbursed_on, first_due_on):
                       disbursed_on.isoformat(),first_due_on.isoformat(),0,"Unrated",p[1],"",user.username,audit._now()))
         conn.execute("INSERT INTO customer_loan_links VALUES (?,?,?,?,?)",
                      (lid,r["username"],request_id,user.username,audit._now()))
+    from src import notify
+    notify.request_decision(request_id, "issued")
     return lid
 
 
@@ -374,7 +420,7 @@ def unlinked_loans():
 
 
 def link_existing(loan_id, username):
-    user = require_role(*STAFF)
+    user = require_role(*ACCOUNT_CREATOR_ROLES)     # Administrator or Risk Manager only
     if username not in {u["username"] for u in customer_accounts()}:
         raise ValueError("Choose an active customer account.")
     with transaction("customer_loan_linked", f"{loan_id}: {username}") as conn:
@@ -384,6 +430,107 @@ def link_existing(loan_id, username):
             raise ValueError("This loan is already linked to a customer.")
         conn.execute("INSERT INTO customer_loan_links VALUES (?,?,NULL,?,?)",
                      (loan_id,username,user.username,audit._now()))
+    from src import notify
+    notify.loans_linked(username, [loan_id])
+
+
+ACCOUNT_CREATOR_ROLES = {"admin", "risk"}
+
+
+def create_account_for_loans(loan_ids, full_name, email, phone, location):
+    """Existing loans (issued at the branch): an Administrator or Risk Manager opens the customer's
+    portal account with the customer's email and links the loans in one step. The customer never
+    types a loan ID - they only sign in. If the email already has a customer account, the loans
+    are linked to it instead. Returns {username, temp_password (or None), created}."""
+    user = require_role(*ACCOUNT_CREATOR_ROLES)
+    loan_ids = [str(x) for x in loan_ids]
+    full_name, phone, location = str(full_name).strip(), str(phone).strip(), str(location).strip()
+    email = auth.normalize_email(email)
+    if not loan_ids:
+        raise ValueError("Choose at least one loan.")
+    if not full_name or not phone or not location:
+        raise ValueError("Enter the customer's full name, phone number and address.")
+    if not auth.valid_email(email):
+        raise ValueError("Enter the customer's email address, for example name@gmail.com.")
+    free = set(unlinked_loans()["loan_id"])
+    taken = [lid for lid in loan_ids if lid not in free]
+    if taken:
+        raise ValueError(f"Already linked or not found: {', '.join(taken)}.")
+    username = auth.find_username_by_email(email)
+    temp, created = None, False
+    if username:
+        rec = auth._read_users()[username]
+        if rec["role"] != "customer":
+            raise ValueError("That email belongs to an employee account. Use the customer's own email.")
+        if not rec.get("email_verified"):
+            auth.set_email(username, email, verified=True, actor=user.username)
+    else:
+        username = auth._free_username(auth._read_users(), email)
+        temp = auth.generate_temp_password()
+        auth.create_user(username, full_name, "customer", temp, must_change=True, actor=user.username,
+                         email=email, email_verified=True)
+        created = True
+    with transaction("customer_account_for_loans", f"{username}: {', '.join(loan_ids)}") as conn:
+        conn.execute("INSERT OR IGNORE INTO customer_profiles VALUES (?,?,?,?,?,?)",
+                     (username, full_name, phone, email, location, audit._now()))
+        for lid in loan_ids:
+            if conn.execute("SELECT 1 FROM customer_loan_links WHERE loan_id=?", (lid,)).fetchone():
+                raise ValueError(f"{lid} was linked by someone else just now. Refresh the page.")
+            conn.execute("INSERT INTO customer_loan_links VALUES (?,?,NULL,?,?)",
+                         (lid, username, user.username, audit._now()))
+    return {"username": username, "temp_password": temp, "created": created, "email": email}
+
+
+def links_by_user():
+    """{username: [loan_id, ...]} for every customer account (staff only)."""
+    require_role(*STAFF)
+    conn = connect()
+    try:
+        out = {}
+        for lid, username in conn.execute("SELECT loan_id, username FROM customer_loan_links ORDER BY linked_at"):
+            out.setdefault(username, []).append(lid)
+        return out
+    finally:
+        conn.close()
+
+
+def resend_sign_in(username):
+    """New one-time password (or Google-only instructions) emailed again. Admin / Risk Manager."""
+    user = require_role(*ACCOUNT_CREATOR_ROLES)
+    rec = auth._read_users().get(username)
+    if not rec or rec["role"] != "customer":
+        raise ValueError("Choose a customer account.")
+    if not rec.get("email"):
+        raise ValueError("This customer has no email address. Add it first.")
+    temp = None
+    if rec.get("hash"):
+        temp = auth.generate_temp_password()
+        auth.set_password(username, temp, must_change=True, actor=user.username, action="password_reset")
+    info = {"username": username, "email": rec["email"], "temp_password": temp, "created": False}
+    return info, send_account_invitation(info, rec.get("display_name", username))
+
+
+def send_account_invitation(info, full_name):
+    """Email the customer how to sign in. Returns an error message, or None when sent."""
+    from src import mailer
+    if not mailer.configured():
+        return "Email sending is not set up, so give the customer the details shown on screen."
+    lines = [f"Hello {full_name},", "",
+             "Your bank has opened a Credit Desk account for you so you can follow your loan online:",
+             "your balance, your payment schedule, receipts, and paying by KHQR.", "",
+             f"Sign in with your email: {info['email']}"]
+    if info.get("temp_password"):
+        lines += [f"One-time password: {info['temp_password']}  (you choose your own at the first sign-in)"]
+    lines += ["Or press 'Continue with Google' with this Gmail address - no password needed.", "",
+              "Never share your password. The bank will never ask for it."]
+    text = "\n".join(lines)
+    html = "<br>".join(__import__("html").escape(x) for x in lines)
+    try:
+        mailer.send(info["email"], "Your Credit Desk account is ready", text,
+                    f'<div style="font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1B2430">{html}</div>')
+    except RuntimeError as exc:
+        return str(exc)
+    return None
 
 
 def my_loans():

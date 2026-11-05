@@ -30,6 +30,13 @@ def staff(actor):
     actor[0] = auth.User("employee", "Employee", "officer")
 
 
+def second(actor, rid):
+    """Four-eyes: a different Risk Manager gives the second approval, then the officer continues."""
+    actor[0] = auth.User("riskmgr", "Risk Manager", "risk")
+    portal.second_approve(rid, "Checked independently")
+    actor[0] = auth.User("employee", "Employee", "officer")
+
+
 def test_request_review_issue_and_owner_privacy(env):
     rid = apply(env)
     assert portal.requests().iloc[0].status == "Pending review"
@@ -44,7 +51,18 @@ def test_request_review_issue_and_owner_privacy(env):
     with pytest.raises(ValueError):
         portal.review(rid, "Declined", "Stale review")
     today = today_local().date()
+    with pytest.raises(ValueError, match="Four-eyes"):
+        portal.issue_loan(rid, today, today + timedelta(days=30))     # one approval is not enough
+    with pytest.raises(PermissionError):
+        portal.second_approve(rid, "self")                             # an officer cannot second-approve
+    env[0] = auth.User("employee", "Employee", "risk")
+    with pytest.raises(PermissionError):
+        portal.second_approve(rid, "same person")                      # nor can the first reviewer
+    second(env, rid)
+    with pytest.raises(ValueError):
+        second(env, rid)                                               # only once
     lid = portal.issue_loan(rid, today, today + timedelta(days=30))
+    assert portal.requests().iloc[0].second_approver == "riskmgr"
     with pytest.raises(ValueError):
         portal.issue_loan(rid, today, today + timedelta(days=30))
     loanbook.add_event(lid, username="employee", role="officer", kind="note",
@@ -98,6 +116,7 @@ def test_issuance_rolls_back_when_audit_fails(env, monkeypatch):
     rid = apply(env)
     staff(env)
     portal.review(rid, "Approved", "Verified", 1200, 0, 12)
+    second(env, rid)
     def fail(*args, **kwargs):
         raise audit.AuditError("Audit unavailable")
     monkeypatch.setattr(audit, "append", fail)
@@ -114,6 +133,9 @@ def test_link_existing_is_explicit_and_immutable(env):
     lid = loanbook.create_loan(username="employee", role="officer", customer_ref="Alice old account",
         product="Personal", principal=300, annual_rate=0, term_months=3,
         disbursed_on=today, first_due_on=today + timedelta(days=30), collateral_value=0, band="Review")
+    with pytest.raises(PermissionError):
+        portal.link_existing(lid, "alice")                             # officers cannot link
+    env[0] = auth.User("riskmgr", "Risk Manager", "risk")
     portal.link_existing(lid, "alice")
     with pytest.raises(ValueError):
         portal.link_existing(lid, "bob")

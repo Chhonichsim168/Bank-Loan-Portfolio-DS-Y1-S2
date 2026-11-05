@@ -71,6 +71,9 @@ def test_backup_roundtrip_preserves_customer_data_and_files(actors, sandbox):
     docs.review(rid, did, "Accepted", "Verified")
     support.reply(tid, "Download the receipt from your payment history.")
     portal.review(rid, "Approved", "Verified", 1000, .12, 12)
+    actors[0] = auth.User("riskmgr", "Risk Manager", "risk")
+    portal.second_approve(rid, "Four-eyes check")
+    actors[0] = auth.User("admin", "Administrator", "admin")
     today = today_local().date()
     lid = portal.issue_loan(rid, today, today + timedelta(days=30))
     from src import loanbook, policy_store, registry

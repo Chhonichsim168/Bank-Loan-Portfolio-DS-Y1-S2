@@ -48,9 +48,9 @@ support.render_staff()
     loan_script.write_text('''
 import streamlit as st
 from src import auth
-from views import customer
+from views import portal
 st.session_state['_auth_user'] = auth.User('customer-ui','Customer','customer')
-customer.render()
+portal.render_apply()
 ''', encoding="utf-8")
     loan_app = AppTest.from_file(str(loan_script), default_timeout=30).run()
     assert not loan_app.exception

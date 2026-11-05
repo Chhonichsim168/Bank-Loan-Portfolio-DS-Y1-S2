@@ -88,3 +88,5 @@ def review(report_id, confirm, note):
                  "Verified payment report " + report_id + " / " + report["reference"],"{}")).lastrowid
         conn.execute("UPDATE customer_payment_reports SET status=?,reviewed_by=?,reviewed_at=?,review_note=?,event_id=? WHERE report_id=?",
             ("Confirmed" if confirm else "Rejected",user.username,audit._now(),note,event_id,report_id))
+    from src import notify
+    notify.payment_report_reviewed(report["username"], report_id, bool(confirm), report["amount"], note)

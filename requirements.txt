@@ -11,6 +11,9 @@ Pillow>=10,<14          # customer profile photo validation and resizing
 openpyxl>=3.1,<4        # Excel export
 reportlab>=4,<6         # PDF export
 cryptography>=42        # encrypted backups
+Authlib>=1.3.2          # Sign in with Google (st.login)
+httpx>=0.27             # used by Authlib to talk to Google
+qrcode>=7.4             # KHQR payment code image in the customer portal
 
 # Used only by generate_report.py (the standalone HTML report) and src/visualizations.py
 matplotlib>=3.8,<4
